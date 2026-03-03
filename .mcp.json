@@ -1,0 +1,17 @@
+{
+  "_template_note": "MCP server configuration for this project. Add project-specific tool servers below. Use HTTP transport (streamable-http) preferred over stdio. See .claude/rules/mcp-conventions.md for naming and schema conventions.",
+  "mcpServers": {
+    "project-tools": {
+      "_comment": "Replace with your project-specific MCP server",
+      "transport": "streamable-http",
+      "url": "http://localhost:3100/mcp",
+      "enabled": false
+    },
+    "playwright": {
+      "_comment": "Playwright MCP for E2E testing (Agent-12)",
+      "command": "npx",
+      "args": ["@anthropic/mcp-playwright"],
+      "enabled": false
+    }
+  }
+}
