@@ -1,0 +1,13 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(ssh -T git@github.com)",
+      "Bash(ssh-add -l)",
+      "Bash(git clone:*)",
+      "Bash(npm install:*)",
+      "Bash(powershell -ExecutionPolicy Bypass -File install.ps1 typescript python golang swift php)",
+      "Bash(powershell -ExecutionPolicy Bypass -File install.ps1 --target antigravity typescript)",
+      "Bash(powershell -ExecutionPolicy Bypass -File install.ps1 --target cursor typescript)"
+    ]
+  }
+}
