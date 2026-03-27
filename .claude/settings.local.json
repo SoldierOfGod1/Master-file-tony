@@ -7,7 +7,14 @@
       "Bash(npm install:*)",
       "Bash(powershell -ExecutionPolicy Bypass -File install.ps1 typescript python golang swift php)",
       "Bash(powershell -ExecutionPolicy Bypass -File install.ps1 --target antigravity typescript)",
-      "Bash(powershell -ExecutionPolicy Bypass -File install.ps1 --target cursor typescript)"
+      "Bash(powershell -ExecutionPolicy Bypass -File install.ps1 --target cursor typescript)",
+      "Bash(wc:*)",
+      "Bash(grep -E \"\\\\.claude\\\\.|\\\\.claude$\")",
+      "Bash(ls -d ~/.claude/skills/*/)",
+      "Bash(sed \"s|.*/||;s|/$||\")",
+      "Read(//tmp/**)",
+      "Bash(ls -d */)",
+      "Bash(grep -E '\\\\.\\(json|yaml|yml|md\\)$')"
     ]
   }
 }
