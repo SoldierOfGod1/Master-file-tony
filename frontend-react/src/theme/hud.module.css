@@ -1,0 +1,300 @@
+/* ============================================================
+   Shared HUD component styles. Consumed by:
+   - HudPanel (the card)
+   - HudSummaryStrip (top-of-page band)
+   - HudGauge (circular gauge)
+   - HudChip + HudStatusLed (atoms)
+   Use this module from any page that wants the Component-Library
+   aesthetic. Page-specific layout (grids etc.) stays in each
+   page's own CSS module.
+   ============================================================ */
+
+/* ----- Page shell (optional helpers) ----- */
+
+.page {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-6);
+  padding: var(--sp-6);
+  animation: hud-slide-in 0.4s var(--ease-out) both;
+}
+
+.pageTitle {
+  font-family: var(--font-display);
+  font-size: 14px;
+  font-weight: 700;
+  letter-spacing: 3px;
+  text-transform: uppercase;
+  color: var(--text-secondary);
+  margin: 0;
+}
+
+@keyframes hud-slide-in {
+  from { opacity: 0; transform: translateY(8px); }
+  to   { opacity: 1; transform: translateY(0);   }
+}
+
+/* ----- Summary strip ----- */
+
+.summaryStrip {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-6);
+  padding: var(--sp-4) var(--sp-5);
+  background: linear-gradient(135deg, rgba(10, 18, 36, 0.9), rgba(5, 10, 24, 0.8));
+  border: 1px solid rgba(0, 240, 255, 0.25);
+  border-radius: var(--glass-radius);
+  position: relative;
+  isolation: isolate;
+  box-shadow: 0 0 28px rgba(0, 240, 255, 0.1);
+}
+
+.summaryStrip::before {
+  content: '';
+  position: absolute;
+  top: 0;
+  left: 20px;
+  right: 20px;
+  height: 1px;
+  background: linear-gradient(90deg, transparent, rgba(0, 240, 255, 0.8) 50%, transparent);
+}
+
+.summaryText {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  min-width: 0;
+}
+
+.summaryTitle {
+  font-family: var(--font-display);
+  font-size: 13px;
+  font-weight: 700;
+  letter-spacing: 3px;
+  text-transform: uppercase;
+  color: var(--neon-cyan);
+  text-shadow: 0 0 6px rgba(0, 240, 255, 0.4);
+}
+
+.summarySub {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--text-secondary);
+  letter-spacing: 0.5px;
+}
+
+.summaryBarWrap {
+  display: flex;
+  height: 6px;
+  border-radius: 3px;
+  overflow: hidden;
+  background: rgba(0, 0, 0, 0.5);
+  margin-top: 4px;
+}
+
+.summaryBarSeg {
+  height: 100%;
+  transition: width 400ms var(--ease-out);
+}
+
+/* ----- Gauge (just the SVG wrapper rule) ----- */
+
+.gauge {
+  flex-shrink: 0;
+}
+
+/* ----- Panel ----- */
+
+.panel {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  background: linear-gradient(180deg, rgba(8, 14, 28, 0.92), rgba(4, 8, 18, 0.96));
+  border: 1px solid rgba(0, 240, 255, 0.25);
+  border-radius: 10px;
+  padding: 0;
+  overflow: hidden;
+  isolation: isolate;
+  transition: transform 160ms var(--ease-out), box-shadow 200ms var(--ease-out);
+}
+
+.panel::before {
+  content: '';
+  position: absolute;
+  top: 0;
+  left: 8px;
+  right: 8px;
+  height: 1px;
+  background: linear-gradient(
+    90deg,
+    transparent,
+    var(--panel-accent, #00f0ff) 40%,
+    var(--panel-accent, #00f0ff) 60%,
+    transparent
+  );
+  opacity: 0.7;
+}
+
+.panel::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background: radial-gradient(
+    ellipse at 100% 0%,
+    var(--panel-accent, #00f0ff) 0%,
+    transparent 50%
+  );
+  opacity: 0.05;
+  pointer-events: none;
+  z-index: 0;
+}
+
+.panel:hover {
+  transform: translateY(-2px);
+  box-shadow: 0 0 20px rgba(0, 240, 255, 0.15), 0 8px 28px rgba(0, 0, 0, 0.5);
+}
+
+.panelClickable {
+  cursor: pointer;
+}
+
+.panelHeader {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 14px;
+  background: linear-gradient(180deg, rgba(0, 240, 255, 0.08), transparent);
+  border-bottom: 1px solid rgba(0, 240, 255, 0.12);
+  position: relative;
+  z-index: 1;
+}
+
+.panelTitle {
+  flex: 1;
+  font-family: var(--font-display);
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 2px;
+  text-transform: uppercase;
+  color: var(--text-primary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.panelMeta {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-family: var(--font-mono);
+  font-size: 10px;
+  color: var(--neon-cyan);
+  padding: 2px 6px;
+  background: rgba(0, 240, 255, 0.08);
+  border-radius: 3px;
+}
+
+.panelBody {
+  padding: var(--sp-4);
+  position: relative;
+  z-index: 1;
+  flex: 1;
+}
+
+.panelFooter {
+  padding: 8px 14px 10px;
+  background: rgba(0, 0, 0, 0.3);
+  border-top: 1px solid rgba(0, 240, 255, 0.1);
+  position: relative;
+  z-index: 1;
+  font-family: var(--font-mono);
+  font-size: 10px;
+  color: var(--text-secondary);
+  letter-spacing: 0.5px;
+}
+
+/* ----- Chip ----- */
+
+.chip {
+  display: inline-flex;
+  align-items: center;
+  padding: 1px 6px;
+  font-family: var(--font-mono);
+  font-size: 9px;
+  letter-spacing: 1px;
+  text-transform: uppercase;
+  border: 1px solid;
+  border-radius: 2px;
+  flex-shrink: 0;
+}
+
+/* ----- Status LED ----- */
+
+.led {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+
+.ledAnimate {
+  animation: led-pulse 1.6s ease-in-out infinite;
+}
+
+@keyframes led-pulse {
+  0%, 100% { opacity: 1;   transform: scale(1);    }
+  50%      { opacity: 0.6; transform: scale(0.85); }
+}
+
+/* ----- Grid helpers ----- */
+
+.grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(320px, 1fr));
+  gap: var(--sp-4);
+}
+
+.gridWide {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(380px, 1fr));
+  gap: var(--sp-4);
+}
+
+/* ----- Row (used by agent / skill / task rosters inside panels) ----- */
+
+.row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 6px;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  border-left: 2px solid rgba(0, 240, 255, 0.15);
+  transition: border-color 160ms;
+}
+
+.row:hover {
+  border-left-color: rgba(0, 240, 255, 0.6);
+}
+
+.rowDot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+
+.rowName {
+  flex: 1;
+  color: var(--text-primary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* ----- Responsive ----- */
+
+@media (max-width: 640px) {
+  .summaryStrip { flex-direction: column; align-items: stretch; }
+}

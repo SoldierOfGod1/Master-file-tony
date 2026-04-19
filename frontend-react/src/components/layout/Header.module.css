@@ -1,0 +1,105 @@
+/* ============================================================
+   Header — Top Bar
+   ============================================================ */
+
+.header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: var(--sp-3) var(--sp-6);
+  background: var(--bg-glass);
+  backdrop-filter: blur(18px);
+  -webkit-backdrop-filter: blur(18px);
+  border-bottom: 1px solid var(--rain-blue);
+  min-height: 56px;
+}
+
+/* ----- Left ----- */
+.left {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-3);
+}
+
+.hexIcon {
+  flex-shrink: 0;
+  filter: drop-shadow(0 0 6px rgba(0, 240, 255, 0.3));
+}
+
+.titleGroup {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.title {
+  font-family: var(--font-display);
+  font-size: 16px;
+  font-weight: 700;
+  letter-spacing: 3px;
+  color: var(--text-primary);
+  line-height: 1.2;
+  text-shadow: 0 0 12px rgba(0, 240, 255, 0.25);
+}
+
+.subtitle {
+  font-family: var(--font-body);
+  font-size: 11px;
+  color: var(--text-secondary);
+  letter-spacing: 0.5px;
+}
+
+/* ----- Right ----- */
+.right {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-5);
+}
+
+.gatewayGroup {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+}
+
+.gatewayDot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+
+.gatewayOnline {
+  background: var(--neon-green);
+  box-shadow: 0 0 6px rgba(0, 255, 136, 0.5);
+  animation: pulseGreen 2s ease-in-out infinite;
+}
+
+.gatewayOffline {
+  background: var(--neon-red);
+  box-shadow: 0 0 6px rgba(255, 51, 85, 0.5);
+}
+
+@keyframes pulseGreen {
+  0%, 100% {
+    box-shadow: 0 0 4px rgba(0, 255, 136, 0.4);
+  }
+  50% {
+    box-shadow: 0 0 12px rgba(0, 255, 136, 0.7), 0 0 24px rgba(0, 255, 136, 0.3);
+  }
+}
+
+.gatewayLabel {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--text-secondary);
+}
+
+.clock {
+  font-family: var(--font-mono);
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--neon-cyan);
+  letter-spacing: 1px;
+  text-shadow: 0 0 8px rgba(0, 240, 255, 0.3);
+}

@@ -1,0 +1,210 @@
+# =============================================================================
+# GitLab CI/CD — SOLDIER OF GOD Command Centre
+# Trunk-based development with conventional commits
+# =============================================================================
+
+stages:
+  - lint
+  - test
+  - build
+  - deploy
+
+variables:
+  APP_NAME: command-centre
+  GO_VERSION: "1.25"
+  NODE_VERSION: "22"
+  DOCKER_TLS_CERTDIR: "/certs"
+
+# ---------------------------------------------------------------------------
+# Lint Stage
+# ---------------------------------------------------------------------------
+go-lint:
+  stage: lint
+  image: golangci/golangci-lint:latest
+  before_script:
+    - cd backend
+  script:
+    - golangci-lint run --timeout 5m ./...
+  rules:
+    - if: '$CI_PIPELINE_SOURCE == "merge_request_event"'
+    - if: '$CI_COMMIT_BRANCH == "main"'
+  tags:
+    - docker
+
+go-vet:
+  stage: lint
+  image: golang:${GO_VERSION}-bookworm
+  before_script:
+    - cd backend
+  script:
+    - go vet ./...
+  rules:
+    - if: '$CI_PIPELINE_SOURCE == "merge_request_event"'
+    - if: '$CI_COMMIT_BRANCH == "main"'
+  tags:
+    - docker
+
+frontend-lint:
+  stage: lint
+  image: node:${NODE_VERSION}-alpine
+  before_script:
+    - cd frontend-react
+    - npm ci --ignore-scripts
+  script:
+    - npm run lint
+  cache:
+    key: frontend-npm-${CI_COMMIT_REF_SLUG}
+    paths:
+      - frontend-react/node_modules/
+  rules:
+    - if: '$CI_PIPELINE_SOURCE == "merge_request_event"'
+    - if: '$CI_COMMIT_BRANCH == "main"'
+  tags:
+    - docker
+
+frontend-typecheck:
+  stage: lint
+  image: node:${NODE_VERSION}-alpine
+  before_script:
+    - cd frontend-react
+    - npm ci --ignore-scripts
+  script:
+    - npx tsc --noEmit
+  cache:
+    key: frontend-npm-${CI_COMMIT_REF_SLUG}
+    paths:
+      - frontend-react/node_modules/
+  rules:
+    - if: '$CI_PIPELINE_SOURCE == "merge_request_event"'
+    - if: '$CI_COMMIT_BRANCH == "main"'
+  tags:
+    - docker
+
+# ---------------------------------------------------------------------------
+# Test Stage
+# ---------------------------------------------------------------------------
+go-test:
+  stage: test
+  image: golang:${GO_VERSION}-bookworm
+  before_script:
+    - cd backend
+  script:
+    - go test -race -cover -coverprofile=coverage.out -count=1 ./...
+    - go tool cover -func=coverage.out
+  coverage: '/total:\s+\(statements\)\s+(\d+\.\d+)%/'
+  artifacts:
+    reports:
+      coverage_report:
+        coverage_format: cobertura
+        path: backend/coverage.out
+    expire_in: 7 days
+  rules:
+    - if: '$CI_PIPELINE_SOURCE == "merge_request_event"'
+    - if: '$CI_COMMIT_BRANCH == "main"'
+  tags:
+    - docker
+
+frontend-test:
+  stage: test
+  image: node:${NODE_VERSION}-alpine
+  before_script:
+    - cd frontend-react
+    - npm ci --ignore-scripts
+  script:
+    - npm test -- --run --coverage 2>/dev/null || echo "No tests configured yet"
+  cache:
+    key: frontend-npm-${CI_COMMIT_REF_SLUG}
+    paths:
+      - frontend-react/node_modules/
+  rules:
+    - if: '$CI_PIPELINE_SOURCE == "merge_request_event"'
+    - if: '$CI_COMMIT_BRANCH == "main"'
+  allow_failure: true
+  tags:
+    - docker
+
+# ---------------------------------------------------------------------------
+# Build Stage
+# ---------------------------------------------------------------------------
+build-backend:
+  stage: build
+  image: docker:latest
+  services:
+    - docker:dind
+  before_script:
+    - docker login -u "$CI_REGISTRY_USER" -p "$CI_REGISTRY_PASSWORD" "$CI_REGISTRY"
+  script:
+    - >
+      docker build
+      --tag "$CI_REGISTRY_IMAGE/api:$CI_COMMIT_SHA"
+      --tag "$CI_REGISTRY_IMAGE/api:latest"
+      --file docker/backend/Dockerfile
+      backend/
+    - docker push "$CI_REGISTRY_IMAGE/api:$CI_COMMIT_SHA"
+    - docker push "$CI_REGISTRY_IMAGE/api:latest"
+  rules:
+    - if: '$CI_COMMIT_BRANCH == "main"'
+    - if: '$CI_COMMIT_TAG'
+  tags:
+    - docker
+
+build-frontend:
+  stage: build
+  image: docker:latest
+  services:
+    - docker:dind
+  before_script:
+    - docker login -u "$CI_REGISTRY_USER" -p "$CI_REGISTRY_PASSWORD" "$CI_REGISTRY"
+  script:
+    - >
+      docker build
+      --tag "$CI_REGISTRY_IMAGE/web:$CI_COMMIT_SHA"
+      --tag "$CI_REGISTRY_IMAGE/web:latest"
+      --file docker/frontend/Dockerfile
+      frontend-react/
+    - docker push "$CI_REGISTRY_IMAGE/web:$CI_COMMIT_SHA"
+    - docker push "$CI_REGISTRY_IMAGE/web:latest"
+  rules:
+    - if: '$CI_COMMIT_BRANCH == "main"'
+    - if: '$CI_COMMIT_TAG'
+  tags:
+    - docker
+
+# ---------------------------------------------------------------------------
+# Deploy Stage
+# ---------------------------------------------------------------------------
+deploy-staging:
+  stage: deploy
+  image: alpine:latest
+  before_script:
+    - apk add --no-cache curl
+  script:
+    - echo "Deploying to staging with image tag $CI_COMMIT_SHA"
+    - echo "Updating ArgoCD application manifest..."
+    # Update image tag in Helm values or Kustomize overlay
+    # argocd app set command-centre-staging --helm-set image.tag=$CI_COMMIT_SHA
+  environment:
+    name: staging
+    url: https://staging.command-centre.rain.co.za
+  rules:
+    - if: '$CI_COMMIT_BRANCH == "main"'
+  tags:
+    - docker
+
+deploy-production:
+  stage: deploy
+  image: alpine:latest
+  before_script:
+    - apk add --no-cache curl
+  script:
+    - echo "Deploying to production with image tag $CI_COMMIT_TAG"
+    - echo "Updating ArgoCD application manifest..."
+    # argocd app set command-centre-production --helm-set image.tag=$CI_COMMIT_TAG
+  environment:
+    name: production
+    url: https://command-centre.rain.co.za
+  when: manual
+  rules:
+    - if: '$CI_COMMIT_TAG =~ /^v\d+\.\d+\.\d+$/'
+  tags:
+    - docker

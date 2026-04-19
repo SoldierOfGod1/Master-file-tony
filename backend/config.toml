@@ -1,0 +1,36 @@
+# SOLDIER OF GOD — Command Centre Backend Configuration
+
+[server]
+host = "127.0.0.1"
+port = 8080
+read_timeout = "15s"
+write_timeout = "15s"
+
+[frontend]
+static_dir = "../frontend"
+
+[database]
+path = "data/command-centre.db"
+
+[openclaw]
+gateway_url = "ws://127.0.0.1:18789"
+reconnect_delay = "2s"
+max_reconnect_delay = "30s"
+token = ""
+
+[websocket]
+ping_interval = "30s"
+pong_timeout = "60s"
+
+[logging]
+level = "info"
+service_name = "command-centre"
+
+[clickup]
+# Personal API token from https://app.clickup.com/settings/apps — PASTE YOURS
+# (env var CC_CLICKUP_TOKEN overrides this at runtime if you'd rather not commit it)
+api_token = ""
+# From https://app.clickup.com/90121466494/...  (URL segment after .com/)
+workspace_id = "90121466494"
+# From https://app.clickup.com/90121466494/v/l/li/901216526868?pr=90126265694
+list_id = "901216526868"

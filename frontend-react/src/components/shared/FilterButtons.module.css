@@ -1,0 +1,46 @@
+/* ============================================================
+   FilterButtons — Reusable Filter Row
+   ============================================================ */
+
+.row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--sp-2);
+}
+
+.btn {
+  padding: var(--sp-1) var(--sp-3);
+  border: 1px solid var(--glass-border);
+  border-radius: var(--glass-radius-sm);
+  background: transparent;
+  color: var(--text-secondary);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  font-weight: 500;
+  letter-spacing: 0.5px;
+  cursor: pointer;
+  transition:
+    background var(--transition-fast),
+    color var(--transition-fast),
+    border-color var(--transition-fast);
+  white-space: nowrap;
+}
+
+.btn:hover {
+  background: var(--bg-glass-hover);
+  color: var(--text-primary);
+  border-color: var(--glass-border-hover);
+}
+
+.btnActive {
+  background: var(--rain-blue);
+  color: #fff;
+  border-color: var(--rain-blue);
+}
+
+.btnActive:hover {
+  background: var(--rain-blue);
+  color: #fff;
+  border-color: var(--rain-blue);
+  opacity: 0.9;
+}

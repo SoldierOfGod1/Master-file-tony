@@ -1,0 +1,45 @@
+# =============================================================================
+# Docker Compose — SOLDIER OF GOD Command Centre
+# Local development and staging environment
+# =============================================================================
+
+services:
+  backend:
+    build:
+      context: ./backend
+      dockerfile: ../docker/backend/Dockerfile
+    container_name: cc-backend
+    ports:
+      - "8080:8080"
+    environment:
+      - CC_SERVER_HOST=0.0.0.0
+      - CC_SERVER_PORT=8080
+      - CC_DATABASE_PATH=/app/data/command-centre.db
+      - CC_LOG_LEVEL=info
+      - CC_LOG_FORMAT=json
+    volumes:
+      - db-data:/app/data
+    restart: unless-stopped
+    networks:
+      - cc-network
+
+  frontend:
+    build:
+      context: ./frontend-react
+      dockerfile: ../docker/frontend/Dockerfile
+    container_name: cc-frontend
+    ports:
+      - "3000:80"
+    depends_on:
+      - backend
+    restart: unless-stopped
+    networks:
+      - cc-network
+
+volumes:
+  db-data:
+    driver: local
+
+networks:
+  cc-network:
+    driver: bridge

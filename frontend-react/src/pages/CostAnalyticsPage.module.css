@@ -1,0 +1,74 @@
+/* ============================================================
+   CostAnalyticsPage — page-specific layout.
+   ============================================================ */
+
+.topRow {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(340px, 1fr));
+  gap: var(--sp-4);
+}
+
+.chartWrap {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: var(--sp-2);
+  min-height: 180px;
+}
+
+.legend {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.legendItem {
+  display: grid;
+  grid-template-columns: 14px minmax(120px, 1fr) auto;
+  gap: 10px;
+  align-items: center;
+  padding: 6px 10px;
+  border-left: 2px solid rgba(0, 240, 255, 0.12);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  transition: border-color 160ms;
+}
+
+.legendItem:hover {
+  border-left-color: rgba(0, 240, 255, 0.55);
+}
+
+.legendDot {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+}
+
+.legendName {
+  color: var(--text-primary);
+  letter-spacing: 0.3px;
+}
+
+.legendValue {
+  color: var(--neon-cyan);
+  font-weight: 700;
+  text-align: right;
+}
+
+.emptyText {
+  color: var(--text-muted);
+  font-style: italic;
+  font-size: 12px;
+  font-family: var(--font-mono);
+  padding: var(--sp-4);
+}
+
+.trendIcon {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 8px;
+  background: rgba(0, 240, 255, 0.08);
+  border-radius: 6px;
+  border: 1px solid rgba(0, 240, 255, 0.2);
+}

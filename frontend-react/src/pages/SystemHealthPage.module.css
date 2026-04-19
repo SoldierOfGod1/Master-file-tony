@@ -1,0 +1,21 @@
+/* ============================================================
+   SystemHealthPage — page-specific layout.
+   ============================================================ */
+
+.body {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: var(--sp-2);
+  min-height: 220px;
+}
+
+.footerLine {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-family: var(--font-mono);
+  font-size: 10px;
+  color: var(--text-secondary);
+  letter-spacing: 0.5px;
+}

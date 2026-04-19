@@ -1,0 +1,137 @@
+/* ============================================================
+   LogTerminalPage — page-specific layout (terminal + filters).
+   ============================================================ */
+
+.filterRow {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+.filterBtn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 12px;
+  font-family: var(--font-display);
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 1.5px;
+  color: var(--text-secondary);
+  background: rgba(8, 14, 28, 0.6);
+  border: 1px solid rgba(0, 240, 255, 0.2);
+  border-radius: 4px;
+  cursor: pointer;
+  transition: all 160ms var(--ease-out);
+}
+
+.filterBtn:hover {
+  color: var(--neon-cyan);
+  border-color: rgba(0, 240, 255, 0.5);
+}
+
+.filterBtnActive {
+  color: var(--neon-cyan);
+  background: rgba(0, 240, 255, 0.12);
+  border-color: var(--neon-cyan);
+  box-shadow: 0 0 8px rgba(0, 240, 255, 0.25);
+}
+
+.filterERR.filterBtnActive { color: #ff3355; border-color: #ff3355; box-shadow: 0 0 8px rgba(255, 51, 85, 0.3); background: rgba(255, 51, 85, 0.1); }
+.filterWRN.filterBtnActive { color: #ffaa00; border-color: #ffaa00; box-shadow: 0 0 8px rgba(255, 170, 0, 0.3); background: rgba(255, 170, 0, 0.1); }
+.filterINF.filterBtnActive { color: #7cc6ff; border-color: #7cc6ff; background: rgba(124, 198, 255, 0.1); }
+.filterDBG.filterBtnActive { color: #6ff2a0; border-color: #6ff2a0; background: rgba(111, 242, 160, 0.1); }
+
+.filterCount {
+  padding: 1px 5px;
+  font-size: 9px;
+  background: rgba(0, 240, 255, 0.18);
+  border-radius: 2px;
+}
+
+/* Terminal area */
+.terminal {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  line-height: 1.6;
+  background: #030610;
+  border: 1px solid rgba(0, 240, 255, 0.08);
+  border-radius: 5px;
+  padding: 12px;
+  max-height: calc(100vh - 380px);
+  min-height: 360px;
+  overflow-y: auto;
+  /* Subtle scanlines over the terminal surface */
+  background-image: repeating-linear-gradient(
+    0deg,
+    rgba(0, 240, 255, 0.015) 0,
+    rgba(0, 240, 255, 0.015) 1px,
+    transparent 1px,
+    transparent 3px
+  );
+}
+
+.terminal::-webkit-scrollbar { width: 6px; }
+.terminal::-webkit-scrollbar-track { background: rgba(0, 0, 0, 0.3); }
+.terminal::-webkit-scrollbar-thumb { background: rgba(0, 240, 255, 0.35); border-radius: 3px; }
+
+.logLine {
+  display: grid;
+  grid-template-columns: auto auto auto 1fr;
+  gap: 8px;
+  padding: 1px 0;
+  white-space: pre;
+  overflow: hidden;
+}
+
+.logLine:hover {
+  background: rgba(0, 240, 255, 0.04);
+}
+
+.logTs {
+  color: var(--text-muted);
+  flex-shrink: 0;
+}
+
+.logLevel {
+  font-weight: 700;
+  letter-spacing: 0.5px;
+  flex-shrink: 0;
+}
+
+.levelError { color: #ff3355; text-shadow: 0 0 4px rgba(255, 51, 85, 0.6); }
+.levelWarn  { color: #ffaa00; text-shadow: 0 0 4px rgba(255, 170, 0, 0.5); }
+.levelInfo  { color: #7cc6ff; }
+.levelDebug { color: #6ff2a0; }
+
+.logAgent {
+  color: var(--neon-cyan);
+  opacity: 0.75;
+  flex-shrink: 0;
+}
+
+.logMsg {
+  color: var(--text-primary);
+  letter-spacing: 0.2px;
+  min-width: 0;
+  text-overflow: ellipsis;
+  overflow: hidden;
+}
+
+.empty {
+  padding: 40px;
+  text-align: center;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--text-muted);
+  font-style: italic;
+  letter-spacing: 0.5px;
+}
+
+.termIcon {
+  display: flex;
+  padding: 8px;
+  background: rgba(0, 240, 255, 0.08);
+  border-radius: 6px;
+  border: 1px solid rgba(0, 240, 255, 0.2);
+}

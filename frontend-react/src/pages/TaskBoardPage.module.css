@@ -1,0 +1,101 @@
+/* ============================================================
+   TaskBoardPage — page-specific layout (columns + cards).
+   ============================================================ */
+
+.board {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: var(--sp-4);
+  align-items: start;
+}
+
+@media (max-width: 900px) {
+  .board { grid-template-columns: repeat(2, 1fr); }
+}
+
+@media (max-width: 520px) {
+  .board { grid-template-columns: 1fr; }
+}
+
+.column {
+  transition: filter 160ms;
+  min-height: 200px;
+}
+
+.columnDragOver {
+  filter: brightness(1.15);
+}
+
+.taskStack {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  min-height: 80px;
+}
+
+.dropHint {
+  padding: 20px 8px;
+  text-align: center;
+  font-family: var(--font-mono);
+  font-size: 10px;
+  color: var(--text-muted);
+  letter-spacing: 0.5px;
+  border: 1px dashed rgba(0, 240, 255, 0.2);
+  border-radius: 6px;
+  font-style: italic;
+}
+
+.taskCard {
+  padding: 10px 12px;
+  background: rgba(12, 20, 36, 0.9);
+  border: 1px solid rgba(0, 240, 255, 0.15);
+  border-radius: 6px;
+  cursor: grab;
+  transition: border-color 160ms, transform 160ms;
+}
+
+.taskCard:hover {
+  border-color: rgba(0, 240, 255, 0.5);
+  transform: translateY(-1px);
+}
+
+.taskCard:active {
+  cursor: grabbing;
+}
+
+.taskTitle {
+  font-family: var(--font-body);
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--text-primary);
+  margin-bottom: 8px;
+  line-height: 1.4;
+}
+
+.taskMeta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  align-items: center;
+}
+
+.taskTime {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  font-family: var(--font-mono);
+  font-size: 10px;
+  color: var(--text-muted);
+  letter-spacing: 0.3px;
+  margin-left: auto;
+}
+
+.legendIcon {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 8px;
+  background: rgba(0, 240, 255, 0.08);
+  border-radius: 6px;
+  border: 1px solid rgba(0, 240, 255, 0.2);
+}

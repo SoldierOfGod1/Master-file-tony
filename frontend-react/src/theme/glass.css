@@ -1,0 +1,66 @@
+/* ============================================================
+   SOLDIER OF GOD — Glass Card Component
+   ============================================================ */
+
+.glass-card {
+  position: relative;
+  background: var(--bg-glass);
+  border: 1px solid var(--glass-border);
+  border-radius: var(--glass-radius);
+  backdrop-filter: blur(var(--glass-blur));
+  -webkit-backdrop-filter: blur(var(--glass-blur));
+  box-shadow: var(--shadow-card);
+  padding: var(--sp-6);
+  transition:
+    background var(--transition-fast),
+    border-color var(--transition-fast),
+    box-shadow var(--transition-fast);
+  overflow: hidden;
+}
+
+/* Subtle top-edge highlight */
+.glass-card::before {
+  content: '';
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  height: 1px;
+  background: linear-gradient(
+    90deg,
+    transparent,
+    rgba(0, 240, 255, 0.12) 30%,
+    rgba(0, 119, 200, 0.18) 50%,
+    rgba(0, 240, 255, 0.12) 70%,
+    transparent
+  );
+  pointer-events: none;
+}
+
+/* Hover state */
+.glass-card:hover {
+  background: var(--bg-glass-hover);
+  border-color: var(--glass-border-hover);
+  box-shadow: var(--shadow-card), var(--glow-blue), var(--kpi-glow);
+  transform: perspective(900px) rotateX(1.5deg) translateY(-2px);
+}
+
+/* Small variant */
+.glass-card--sm {
+  border-radius: var(--glass-radius-sm);
+  padding: var(--sp-4);
+}
+
+/* Interactive variant - adds cursor and slight scale */
+.glass-card--interactive {
+  cursor: pointer;
+}
+
+.glass-card--interactive:hover {
+  transform: translateY(-1px);
+}
+
+.glass-card--interactive:active {
+  transform: translateY(0);
+  transition-duration: 0.08s;
+}

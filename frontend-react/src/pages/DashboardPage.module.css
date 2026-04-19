@@ -1,0 +1,337 @@
+/* ============================================================
+   DashboardPage — Neon Hex Grid (ported from Canva Variant A)
+   ============================================================ */
+
+.page {
+  width: 100%;
+  padding: var(--sp-6);
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-6);
+}
+
+.pageTitle {
+  font-family: var(--font-display);
+  font-size: 14px;
+  font-weight: 700;
+  letter-spacing: 3px;
+  text-transform: uppercase;
+  color: var(--text-secondary);
+  margin-bottom: var(--sp-2);
+}
+
+/* ----- Hex command deck: 6 hex tiles + central LIVE orb ----- */
+
+.hexDeck {
+  position: relative;
+  width: 100%;
+  min-height: 360px;
+  padding: 40px 20px;
+  border-radius: 18px;
+  background:
+    radial-gradient(
+      ellipse at center,
+      rgba(0, 240, 255, 0.08) 0%,
+      rgba(0, 119, 200, 0.03) 40%,
+      transparent 75%
+    ),
+    repeating-radial-gradient(
+      circle at 50% 50%,
+      rgba(0, 240, 255, 0.06) 0,
+      rgba(0, 240, 255, 0.06) 1px,
+      transparent 1px,
+      transparent 60px
+    ),
+    linear-gradient(180deg, rgba(5, 10, 24, 0.6), rgba(5, 10, 24, 0.2));
+  overflow: hidden;
+  isolation: isolate;
+}
+
+/* Corner tick marks — tactical HUD frame */
+.hexDeck::before,
+.hexDeck::after {
+  content: '';
+  position: absolute;
+  width: 24px;
+  height: 24px;
+  border-color: var(--neon-cyan);
+  opacity: 0.6;
+  pointer-events: none;
+}
+.hexDeck::before {
+  top: 12px;
+  left: 12px;
+  border-top: 2px solid;
+  border-left: 2px solid;
+}
+.hexDeck::after {
+  bottom: 12px;
+  right: 12px;
+  border-bottom: 2px solid;
+  border-right: 2px solid;
+}
+
+.hexLabel {
+  position: absolute;
+  top: 16px;
+  left: 50%;
+  transform: translateX(-50%);
+  font-family: var(--font-display);
+  font-size: 11px;
+  letter-spacing: 4px;
+  text-transform: uppercase;
+  color: var(--neon-cyan);
+  opacity: 0.7;
+  pointer-events: none;
+}
+.hexLabelBottom {
+  top: auto;
+  bottom: 16px;
+  letter-spacing: 3px;
+}
+
+.hexRing {
+  display: grid;
+  grid-template-columns: repeat(7, 1fr);
+  align-items: center;
+  gap: 12px;
+  max-width: 1100px;
+  margin: 0 auto;
+  position: relative;
+  z-index: 1;
+}
+
+@media (max-width: 900px) {
+  .hexRing {
+    grid-template-columns: repeat(3, 1fr);
+  }
+}
+
+/* Hexagonal KPI tile. The flat-top hex is done with clip-path so the
+   glass background shows through. The holographic border uses the shared
+   .holoFrame::before with mask-compositing — but clip-path would strip that,
+   so we reproduce the neon edge with a conic-gradient backdrop. */
+.hex {
+  position: relative;
+  aspect-ratio: 1 / 0.9;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  padding: 14px 10px;
+  text-align: center;
+  cursor: default;
+  transition: transform 200ms var(--ease-out), filter 200ms var(--ease-out);
+  /* Flat-top hexagon */
+  clip-path: polygon(25% 0, 75% 0, 100% 50%, 75% 100%, 25% 100%, 0 50%);
+  background:
+    linear-gradient(
+      135deg,
+      rgba(0, 240, 255, 0.18),
+      rgba(0, 119, 200, 0.08) 45%,
+      rgba(255, 0, 229, 0.14)
+    );
+}
+
+/* Inner hex — slightly smaller, produces the "neon outline" effect */
+.hex::before {
+  content: '';
+  position: absolute;
+  inset: 2px;
+  clip-path: polygon(25% 0, 75% 0, 100% 50%, 75% 100%, 25% 100%, 0 50%);
+  background: rgba(5, 10, 24, 0.88);
+  z-index: 0;
+}
+
+.hex > * {
+  position: relative;
+  z-index: 1;
+}
+
+.hex:hover {
+  transform: translateY(-3px) scale(1.02);
+  filter: drop-shadow(0 0 12px rgba(0, 240, 255, 0.45));
+}
+
+.hexValue {
+  font-family: var(--font-display);
+  font-size: 22px;
+  font-weight: 700;
+  color: var(--neon-cyan);
+  line-height: 1;
+  text-shadow: 0 0 10px rgba(0, 240, 255, 0.55);
+}
+
+.hexLabel2 {
+  font-size: 9px;
+  letter-spacing: 1.5px;
+  text-transform: uppercase;
+  color: var(--text-secondary);
+  max-width: 90%;
+}
+
+.hexTrend {
+  font-size: 10px;
+  font-weight: 600;
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+}
+
+/* Column layouts — 3 left, 3 right, center orb occupies middle column */
+.hexLeft {
+  grid-column: 1 / 4;
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 12px;
+}
+.hexRight {
+  grid-column: 5 / 8;
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 12px;
+}
+.hexCenter {
+  grid-column: 4 / 5;
+}
+
+/* Staggered rows: offset middle hex vertically for honeycomb feel */
+.hexLeft > :nth-child(2),
+.hexRight > :nth-child(2) {
+  transform: translateY(36px);
+}
+
+@media (max-width: 900px) {
+  .hexLeft,
+  .hexRight {
+    grid-column: 1 / -1;
+  }
+  .hexCenter {
+    grid-column: 1 / -1;
+    order: -1;
+  }
+  .hexLeft > :nth-child(2),
+  .hexRight > :nth-child(2) {
+    transform: none;
+  }
+}
+
+/* Central LIVE command orb */
+.orb {
+  position: relative;
+  aspect-ratio: 1 / 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  margin: 0 auto;
+  width: 100%;
+  max-width: 180px;
+  clip-path: polygon(25% 0, 75% 0, 100% 50%, 75% 100%, 25% 100%, 0 50%);
+  background: linear-gradient(135deg, rgba(0, 240, 255, 0.3), rgba(255, 0, 229, 0.2));
+}
+
+.orb::before {
+  content: '';
+  position: absolute;
+  inset: 2px;
+  clip-path: polygon(25% 0, 75% 0, 100% 50%, 75% 100%, 25% 100%, 0 50%);
+  background: radial-gradient(circle at 50% 50%, rgba(5, 10, 24, 0.6), rgba(5, 10, 24, 0.98));
+  z-index: 0;
+}
+
+.orbInner {
+  position: relative;
+  z-index: 1;
+  width: 56%;
+  aspect-ratio: 1 / 1;
+  border-radius: 50%;
+  border: 2px solid var(--neon-cyan);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  box-shadow:
+    0 0 16px rgba(0, 240, 255, 0.5),
+    inset 0 0 24px rgba(0, 240, 255, 0.3);
+  animation: orb-pulse 2.4s ease-in-out infinite;
+}
+
+.orbText {
+  font-family: var(--font-display);
+  font-size: 13px;
+  font-weight: 700;
+  letter-spacing: 3px;
+  color: var(--neon-cyan);
+  text-shadow: 0 0 12px rgba(0, 240, 255, 0.8);
+}
+
+@keyframes orb-pulse {
+  0%, 100% {
+    box-shadow:
+      0 0 16px rgba(0, 240, 255, 0.5),
+      inset 0 0 24px rgba(0, 240, 255, 0.3);
+  }
+  50% {
+    box-shadow:
+      0 0 32px rgba(0, 240, 255, 0.8),
+      inset 0 0 40px rgba(0, 240, 255, 0.5);
+  }
+}
+
+/* ----- Trend arrow colours (shared with hex tile) ----- */
+.trendUp { color: var(--neon-green); }
+.trendDown { color: var(--neon-red); }
+.trendFlat { color: var(--text-muted); }
+
+/* ----- Summary / Navigation Cards (kept, now with holographic frame) ----- */
+
+.summaryGrid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+  gap: var(--sp-4);
+}
+
+.summaryLink {
+  text-decoration: none;
+  color: inherit;
+  display: block;
+}
+
+.summaryCard {
+  cursor: pointer;
+  transition: transform var(--transition-fast);
+}
+
+.summaryCard:hover {
+  transform: translateY(-2px);
+}
+
+.summaryCardInner {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: var(--sp-3);
+  padding: var(--sp-4) 0;
+}
+
+.summaryIcon {
+  color: var(--rain-blue);
+  opacity: 0.85;
+}
+
+.summaryLabel {
+  font-family: var(--font-display);
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 2px;
+  text-transform: uppercase;
+  color: var(--text-secondary);
+}
+
+.summaryCount {
+  font-family: var(--font-display);
+  font-size: 18px;
+  font-weight: 700;
+  color: var(--neon-cyan);
+}

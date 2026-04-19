@@ -1,0 +1,167 @@
+# =============================================================================
+# Default values for Command Centre Helm chart
+# =============================================================================
+
+# Global settings
+environment: production
+nameOverride: ""
+fullnameOverride: ""
+
+# ---------------------------------------------------------------------------
+# Backend configuration
+# ---------------------------------------------------------------------------
+backend:
+  replicaCount: 2
+
+  image:
+    repository: registry.rain.co.za/command-centre/api
+    tag: "latest"
+    pullPolicy: IfNotPresent
+
+  service:
+    type: ClusterIP
+    port: 8080
+
+  resources:
+    requests:
+      cpu: 100m
+      memory: 128Mi
+    limits:
+      cpu: 500m
+      memory: 256Mi
+
+  env:
+    CC_SERVER_HOST: "0.0.0.0"
+    CC_SERVER_PORT: "8080"
+    CC_DATABASE_PATH: "/app/data/command-centre.db"
+    CC_LOG_LEVEL: "info"
+    CC_LOG_FORMAT: "json"
+
+  # Health probes
+  livenessProbe:
+    httpGet:
+      path: /health
+      port: 8080
+    initialDelaySeconds: 10
+    periodSeconds: 30
+    timeoutSeconds: 5
+    failureThreshold: 3
+
+  readinessProbe:
+    httpGet:
+      path: /health
+      port: 8080
+    initialDelaySeconds: 5
+    periodSeconds: 10
+    timeoutSeconds: 3
+    failureThreshold: 3
+
+  # Pod disruption budget
+  podDisruptionBudget:
+    minAvailable: 1
+
+  # Node selector and tolerations
+  nodeSelector: {}
+  tolerations: []
+  affinity: {}
+
+# ---------------------------------------------------------------------------
+# Frontend configuration
+# ---------------------------------------------------------------------------
+frontend:
+  replicaCount: 2
+
+  image:
+    repository: registry.rain.co.za/command-centre/web
+    tag: "latest"
+    pullPolicy: IfNotPresent
+
+  service:
+    type: ClusterIP
+    port: 80
+
+  resources:
+    requests:
+      cpu: 50m
+      memory: 64Mi
+    limits:
+      cpu: 200m
+      memory: 128Mi
+
+  livenessProbe:
+    httpGet:
+      path: /
+      port: 80
+    initialDelaySeconds: 5
+    periodSeconds: 30
+    timeoutSeconds: 3
+    failureThreshold: 3
+
+  readinessProbe:
+    httpGet:
+      path: /
+      port: 80
+    initialDelaySeconds: 3
+    periodSeconds: 10
+    timeoutSeconds: 3
+    failureThreshold: 3
+
+  nodeSelector: {}
+  tolerations: []
+  affinity: {}
+
+# ---------------------------------------------------------------------------
+# Ingress configuration
+# ---------------------------------------------------------------------------
+ingress:
+  enabled: true
+  className: nginx
+  annotations:
+    nginx.ingress.kubernetes.io/proxy-body-size: "10m"
+    nginx.ingress.kubernetes.io/proxy-read-timeout: "60"
+    nginx.ingress.kubernetes.io/proxy-send-timeout: "60"
+    nginx.ingress.kubernetes.io/websocket-services: "command-centre-backend"
+    cert-manager.io/cluster-issuer: "letsencrypt-prod"
+  hosts:
+    - host: command-centre.rain.co.za
+      paths:
+        - path: /
+          pathType: Prefix
+          service: frontend
+        - path: /api
+          pathType: Prefix
+          service: backend
+        - path: /ws
+          pathType: Prefix
+          service: backend
+        - path: /health
+          pathType: Prefix
+          service: backend
+  tls:
+    - secretName: command-centre-tls
+      hosts:
+        - command-centre.rain.co.za
+
+# ---------------------------------------------------------------------------
+# Persistent volume for SQLite database
+# ---------------------------------------------------------------------------
+persistence:
+  enabled: true
+  storageClass: ""
+  accessMode: ReadWriteOnce
+  size: 1Gi
+
+# ---------------------------------------------------------------------------
+# ConfigMap values
+# ---------------------------------------------------------------------------
+config:
+  serverHost: "0.0.0.0"
+  serverPort: "8080"
+  databasePath: "/app/data/command-centre.db"
+  logLevel: "info"
+  logFormat: "json"
+
+# ---------------------------------------------------------------------------
+# Image pull secrets (for private registries)
+# ---------------------------------------------------------------------------
+imagePullSecrets: []

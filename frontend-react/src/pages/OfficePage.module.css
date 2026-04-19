@@ -1,0 +1,113 @@
+/* ============================================================
+   OfficePage — page-specific layout only.
+   Shared HUD panel/summary/gauge rules live in theme/hud.module.css.
+   ============================================================ */
+
+.header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--sp-4);
+}
+
+.titleRow {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-3);
+}
+
+.titleIcon {
+  color: var(--neon-cyan);
+  filter: drop-shadow(0 0 6px rgba(0, 240, 255, 0.4));
+}
+
+/* Panel body layout: gauge on left, roster on right */
+.panelBody {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-4);
+  min-height: 140px;
+}
+
+.roster {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+  max-height: 140px;
+  overflow-y: auto;
+}
+
+.roster::-webkit-scrollbar { width: 4px; }
+.roster::-webkit-scrollbar-track { background: rgba(0, 0, 0, 0.2); }
+.roster::-webkit-scrollbar-thumb { background: rgba(0, 240, 255, 0.3); border-radius: 2px; }
+
+.rosterEmpty {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  color: var(--text-muted);
+  font-style: italic;
+  letter-spacing: 0.3px;
+}
+
+/* Footer ticker */
+.footerTicker {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+}
+
+.tickerIcon {
+  color: var(--neon-cyan);
+  margin-top: 2px;
+  flex-shrink: 0;
+}
+
+.ticker {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+  overflow: hidden;
+}
+
+.tickerLine {
+  font-size: 9px;
+  color: var(--text-secondary);
+  letter-spacing: 0.3px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.tickerIdle {
+  font-size: 9px;
+  color: var(--text-muted);
+  font-style: italic;
+  letter-spacing: 0.3px;
+}
+
+/* Empty state */
+.empty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: var(--sp-4);
+  padding: var(--sp-10) var(--sp-6);
+  color: var(--text-muted);
+}
+
+.emptyIcon { opacity: 0.3; }
+
+.emptyText {
+  font-family: var(--font-mono);
+  font-size: 13px;
+  letter-spacing: 1px;
+}
+
+@media (max-width: 640px) {
+  .panelBody { flex-direction: column; align-items: stretch; }
+}

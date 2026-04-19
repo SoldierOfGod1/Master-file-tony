@@ -1,0 +1,17 @@
+apiVersion: v2
+name: command-centre
+description: SOLDIER OF GOD Command Centre — Process Automation Dashboard
+type: application
+version: 0.1.0
+appVersion: "1.0.0"
+keywords:
+  - command-centre
+  - process-automation
+  - dashboard
+  - rain
+maintainers:
+  - name: Baptista Manuel
+    email: baptista.manuel@rain.co.za
+home: https://github.com/SoldierOfGod1/command-centre
+sources:
+  - https://github.com/SoldierOfGod1/command-centre

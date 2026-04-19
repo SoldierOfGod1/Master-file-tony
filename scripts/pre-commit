@@ -1,0 +1,131 @@
+#!/usr/bin/env bash
+# =============================================================================
+# Pre-commit hook — SOLDIER OF GOD Command Centre
+# Checks: go fmt, go vet, go test (backend), npm lint (frontend)
+# =============================================================================
+
+set -euo pipefail
+
+RED='\033[0;31m'
+GREEN='\033[0;32m'
+YELLOW='\033[0;33m'
+NC='\033[0m' # No Color
+
+ERRORS=0
+
+echo "Running pre-commit checks..."
+echo ""
+
+# ---------------------------------------------------------------------------
+# Backend checks (only if Go files changed)
+# ---------------------------------------------------------------------------
+BACKEND_CHANGED=$(git diff --cached --name-only --diff-filter=ACM | grep '^backend/.*\.go$' || true)
+
+if [ -n "$BACKEND_CHANGED" ]; then
+    echo -e "${YELLOW}[backend]${NC} Go files changed — running checks..."
+
+    # Check go fmt
+    echo -n "  go fmt... "
+    UNFORMATTED=$(cd backend && gofmt -l . 2>&1 || true)
+    if [ -n "$UNFORMATTED" ]; then
+        echo -e "${RED}FAIL${NC}"
+        echo "  The following files need formatting:"
+        echo "$UNFORMATTED" | sed 's/^/    /'
+        echo "  Run: cd backend && gofmt -w -s ."
+        ERRORS=$((ERRORS + 1))
+    else
+        echo -e "${GREEN}OK${NC}"
+    fi
+
+    # Check go vet
+    echo -n "  go vet... "
+    if ! (cd backend && go vet ./... 2>&1); then
+        echo -e "${RED}FAIL${NC}"
+        ERRORS=$((ERRORS + 1))
+    else
+        echo -e "${GREEN}OK${NC}"
+    fi
+
+    # Run tests
+    echo -n "  go test... "
+    if ! (cd backend && go test -short -count=1 ./... > /dev/null 2>&1); then
+        echo -e "${RED}FAIL${NC}"
+        echo "  Run: cd backend && go test -v ./..."
+        ERRORS=$((ERRORS + 1))
+    else
+        echo -e "${GREEN}OK${NC}"
+    fi
+else
+    echo -e "${YELLOW}[backend]${NC} No Go files changed — skipping"
+fi
+
+echo ""
+
+# ---------------------------------------------------------------------------
+# Frontend checks (only if frontend files changed)
+# ---------------------------------------------------------------------------
+FRONTEND_CHANGED=$(git diff --cached --name-only --diff-filter=ACM | grep '^frontend-react/.*\.\(ts\|tsx\|js\|jsx\)$' || true)
+
+if [ -n "$FRONTEND_CHANGED" ]; then
+    echo -e "${YELLOW}[frontend]${NC} Frontend files changed — running checks..."
+
+    # Check npm lint
+    echo -n "  npm lint... "
+    if [ -d "frontend-react/node_modules" ]; then
+        if ! (cd frontend-react && npm run lint --silent 2>&1); then
+            echo -e "${RED}FAIL${NC}"
+            echo "  Run: cd frontend-react && npm run lint"
+            ERRORS=$((ERRORS + 1))
+        else
+            echo -e "${GREEN}OK${NC}"
+        fi
+    else
+        echo -e "${YELLOW}SKIP${NC} (node_modules not installed)"
+    fi
+
+    # TypeScript type check
+    echo -n "  tsc --noEmit... "
+    if [ -d "frontend-react/node_modules" ]; then
+        if ! (cd frontend-react && npx tsc --noEmit 2>&1); then
+            echo -e "${RED}FAIL${NC}"
+            ERRORS=$((ERRORS + 1))
+        else
+            echo -e "${GREEN}OK${NC}"
+        fi
+    else
+        echo -e "${YELLOW}SKIP${NC} (node_modules not installed)"
+    fi
+else
+    echo -e "${YELLOW}[frontend]${NC} No frontend files changed — skipping"
+fi
+
+echo ""
+
+# ---------------------------------------------------------------------------
+# Check for secrets
+# ---------------------------------------------------------------------------
+echo -n "Checking for secrets... "
+SECRETS_PATTERN='(password|secret|api_key|apikey|token|private_key)\s*[:=]\s*["\x27][^"\x27]{8,}'
+STAGED_CONTENT=$(git diff --cached --diff-filter=ACM -U0 | grep '^+' | grep -v '^+++' || true)
+if echo "$STAGED_CONTENT" | grep -iEq "$SECRETS_PATTERN"; then
+    echo -e "${RED}POTENTIAL SECRETS DETECTED${NC}"
+    echo "  Review staged changes for hardcoded credentials."
+    echo "  Use environment variables or a secret manager instead."
+    ERRORS=$((ERRORS + 1))
+else
+    echo -e "${GREEN}OK${NC}"
+fi
+
+echo ""
+
+# ---------------------------------------------------------------------------
+# Result
+# ---------------------------------------------------------------------------
+if [ "$ERRORS" -gt 0 ]; then
+    echo -e "${RED}Pre-commit failed with $ERRORS error(s).${NC}"
+    echo "Fix the issues above and try again."
+    exit 1
+fi
+
+echo -e "${GREEN}All pre-commit checks passed.${NC}"
+exit 0

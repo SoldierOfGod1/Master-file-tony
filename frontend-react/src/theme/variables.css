@@ -1,0 +1,110 @@
+/* ============================================================
+   SOLDIER OF GOD — AI Agent Command Centre
+   Design Tokens & CSS Custom Properties
+   ============================================================ */
+
+:root {
+  /* Backgrounds */
+  --bg-void: #050510;
+  --bg-surface: rgba(10, 15, 30, 0.6);
+  --bg-glass: rgba(15, 20, 40, 0.45);
+  --bg-glass-hover: rgba(20, 30, 60, 0.55);
+
+  /* Brand */
+  --rain-blue: #0077C8;
+  --rain-blue-glow: rgba(0, 119, 200, 0.3);
+
+  /* Neon Palette */
+  --neon-cyan: #00f0ff;
+  --neon-green: #00ff88;
+  --neon-red: #ff3355;
+  --neon-amber: #ffaa00;
+  --neon-magenta: #ff00e5;
+
+  /* Text */
+  --text-primary: rgba(255, 255, 255, 0.92);
+  --text-secondary: rgba(255, 255, 255, 0.55);
+  --text-muted: rgba(255, 255, 255, 0.30);
+
+  /* Glass */
+  --glass-border: rgba(255, 255, 255, 0.08);
+  --glass-border-hover: rgba(0, 119, 200, 0.3);
+  --glass-blur: 18px;
+  --glass-radius: 16px;
+  --glass-radius-sm: 10px;
+
+  /* Typography */
+  --font-display: 'Orbitron', 'Poppins', 'Segoe UI', system-ui, sans-serif;
+  --font-mono: 'JetBrains Mono', 'Cascadia Code', 'Consolas', monospace;
+  --font-body: 'Poppins', 'Inter', 'Segoe UI', system-ui, sans-serif;
+
+  /* Spacing */
+  --sp-1: 4px;
+  --sp-2: 8px;
+  --sp-3: 12px;
+  --sp-4: 16px;
+  --sp-5: 20px;
+  --sp-6: 24px;
+  --sp-8: 32px;
+  --sp-10: 40px;
+
+  /* Shadows & Glows */
+  --glow-blue: 0 0 20px rgba(0, 119, 200, 0.15);
+  --glow-cyan: 0 0 20px rgba(0, 240, 255, 0.15);
+  --shadow-card: 0 8px 32px rgba(0, 0, 0, 0.3);
+
+  /* Motion */
+  --ease-out: cubic-bezier(0.16, 1, 0.3, 1);
+  --transition-fast: 0.2s var(--ease-out);
+  --transition-normal: 0.35s var(--ease-out);
+
+  /* Holographic edge gradient used on KPI tiles and hero cards */
+  --holo-edge: linear-gradient(
+    135deg,
+    rgba(0, 240, 255, 0.55) 0%,
+    rgba(0, 255, 136, 0.45) 30%,
+    rgba(255, 0, 229, 0.45) 65%,
+    rgba(0, 240, 255, 0.55) 100%
+  );
+  --kpi-glow: 0 0 24px rgba(0, 240, 255, 0.22), 0 0 48px rgba(255, 0, 229, 0.10);
+  --data-line: rgba(0, 240, 255, 0.35);
+
+  /* Theme token aliases (CSS var naming used by newer pages) */
+  --color-text: var(--text-primary);
+  --color-text-dim: var(--text-secondary);
+  --color-neon-cyan: var(--neon-cyan);
+  --color-neon-green: var(--neon-green);
+  --color-neon-magenta: var(--neon-magenta);
+  --color-bg-void: var(--bg-void);
+}
+
+/* Holographic border animation used by .holoFrame + .kpi tiles */
+@keyframes holo-shift {
+  0%   { background-position: 0% 50%; }
+  50%  { background-position: 100% 50%; }
+  100% { background-position: 0% 50%; }
+}
+
+/* Wrap any element in `.holoFrame` to get a 1px gradient border that shifts
+   hues over 8s. Used on KPI tiles and the hero card. */
+.holoFrame {
+  position: relative;
+  isolation: isolate;
+}
+.holoFrame::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  padding: 1px;
+  background: var(--holo-edge);
+  background-size: 300% 300%;
+  animation: holo-shift 8s linear infinite;
+  -webkit-mask:
+    linear-gradient(#000 0 0) content-box,
+    linear-gradient(#000 0 0);
+  -webkit-mask-composite: xor;
+          mask-composite: exclude;
+  pointer-events: none;
+  opacity: 0.85;
+}

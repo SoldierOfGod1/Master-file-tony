@@ -1,0 +1,136 @@
+/* ClickUp settings form — sits inside a HudPanel. */
+
+.form {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  max-width: 560px;
+}
+
+.helpText {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--text-secondary);
+  line-height: 1.6;
+  letter-spacing: 0.2px;
+  margin: 0;
+}
+
+.helpText code {
+  padding: 1px 5px;
+  background: rgba(0, 240, 255, 0.08);
+  color: var(--neon-cyan);
+  border-radius: 2px;
+  font-size: 10px;
+}
+
+.field {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+}
+
+.label {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-family: var(--font-display);
+  font-size: 10px;
+  letter-spacing: 2px;
+  text-transform: uppercase;
+  color: var(--neon-cyan);
+}
+
+.inlineLink {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  font-size: 9px;
+  color: var(--text-muted);
+  text-decoration: none;
+  letter-spacing: 0.3px;
+  text-transform: none;
+}
+.inlineLink:hover {
+  color: var(--neon-cyan);
+}
+
+.input {
+  width: 100%;
+  padding: 8px 11px;
+  background: rgba(5, 10, 24, 0.85);
+  border: 1px solid rgba(0, 240, 255, 0.25);
+  border-radius: 4px;
+  color: var(--text-primary);
+  font-family: var(--font-mono);
+  font-size: 12px;
+  outline: none;
+  transition: border-color 160ms, box-shadow 160ms;
+}
+
+.input:focus {
+  border-color: var(--neon-cyan);
+  box-shadow: 0 0 0 3px rgba(0, 240, 255, 0.1);
+}
+
+.hint {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  color: var(--text-muted);
+  letter-spacing: 0.2px;
+}
+
+.hint code {
+  padding: 1px 5px;
+  background: rgba(0, 240, 255, 0.06);
+  color: var(--neon-cyan);
+  border-radius: 2px;
+}
+
+.actions {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-top: 6px;
+}
+
+.saveBtn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 16px;
+  font-family: var(--font-display);
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 1.5px;
+  text-transform: uppercase;
+  color: #05050f;
+  background: var(--neon-cyan);
+  border: none;
+  border-radius: 4px;
+  cursor: pointer;
+  transition: filter 160ms;
+}
+
+.saveBtn:hover { filter: brightness(1.15); }
+.saveBtn:disabled { opacity: 0.5; cursor: not-allowed; }
+
+.okText {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--neon-green);
+  letter-spacing: 0.3px;
+}
+
+.errorText {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: #ff3355;
+  letter-spacing: 0.3px;
+}

@@ -1,0 +1,13 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "command-centre.fullname" . }}-config
+  labels:
+    {{- include "command-centre.labels" . | nindent 4 }}
+data:
+  CC_SERVER_HOST: {{ .Values.config.serverHost | quote }}
+  CC_SERVER_PORT: {{ .Values.config.serverPort | quote }}
+  CC_DATABASE_PATH: {{ .Values.config.databasePath | quote }}
+  CC_LOG_LEVEL: {{ .Values.config.logLevel | quote }}
+  CC_LOG_FORMAT: {{ .Values.config.logFormat | quote }}
+  CC_ENVIRONMENT: {{ .Values.environment | quote }}

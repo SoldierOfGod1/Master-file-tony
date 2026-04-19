@@ -1,0 +1,268 @@
+/* Database connection registry — list + inline edit + create modal. */
+
+.intro {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--text-secondary);
+  line-height: 1.6;
+  letter-spacing: 0.2px;
+  margin: 0 0 var(--sp-3);
+}
+
+.intro strong { color: var(--neon-cyan); font-weight: 700; }
+
+/* ---- List of connection cards ---- */
+.connList {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.connCard {
+  display: flex;
+  flex-direction: column;
+  background: rgba(8, 14, 28, 0.7);
+  border: 1px solid rgba(0, 240, 255, 0.15);
+  border-radius: 6px;
+  overflow: hidden;
+  transition: border-color 160ms;
+}
+
+.connCard:hover {
+  border-color: rgba(0, 240, 255, 0.35);
+}
+
+.connCardPrimary {
+  border-color: rgba(0, 240, 255, 0.5);
+  box-shadow: 0 0 10px rgba(0, 240, 255, 0.1);
+}
+
+/* Collapsed header button — whole row is clickable */
+.connHead {
+  display: grid;
+  grid-template-columns: 20px 1fr auto;
+  gap: 10px;
+  align-items: center;
+  padding: 9px 12px;
+  background: transparent;
+  border: none;
+  cursor: pointer;
+  text-align: left;
+  color: inherit;
+  transition: background 160ms;
+}
+
+.connHead:hover { background: rgba(0, 240, 255, 0.04); }
+
+.connLedWrap {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.connTitle {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.connLabel {
+  font-family: var(--font-body);
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-primary);
+  letter-spacing: 0.3px;
+}
+
+.connHost {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-family: var(--font-mono);
+  font-size: 10px;
+  color: var(--text-muted);
+  letter-spacing: 0.2px;
+}
+
+.connBadges {
+  display: flex;
+  gap: 5px;
+  align-items: center;
+  flex-shrink: 0;
+}
+
+/* ---- Expanded edit body ---- */
+.connBody {
+  padding: 12px 14px 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  border-top: 1px solid rgba(0, 240, 255, 0.08);
+}
+
+.twoCol {
+  display: grid;
+  grid-template-columns: 2fr 1fr;
+  gap: 10px;
+}
+
+.field {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.label {
+  font-family: var(--font-display);
+  font-size: 9px;
+  letter-spacing: 1.5px;
+  text-transform: uppercase;
+  color: var(--neon-cyan);
+}
+
+.input {
+  width: 100%;
+  padding: 7px 10px;
+  background: rgba(5, 10, 24, 0.85);
+  border: 1px solid rgba(0, 240, 255, 0.25);
+  border-radius: 4px;
+  color: var(--text-primary);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  outline: none;
+  transition: border-color 160ms;
+}
+
+.input:focus {
+  border-color: var(--neon-cyan);
+  box-shadow: 0 0 0 2px rgba(0, 240, 255, 0.1);
+}
+
+.hint {
+  font-family: var(--font-mono);
+  font-size: 9px;
+  color: var(--text-muted);
+  letter-spacing: 0.2px;
+}
+
+/* ---- Action buttons ---- */
+.actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+  margin-top: 4px;
+}
+
+.saveBtn, .testBtn, .secondaryBtn, .deleteBtn {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 6px 12px;
+  font-family: var(--font-display);
+  font-size: 10px;
+  letter-spacing: 1.5px;
+  text-transform: uppercase;
+  border: 1px solid;
+  border-radius: 4px;
+  cursor: pointer;
+  font-weight: 700;
+  transition: all 160ms;
+}
+
+.saveBtn {
+  color: #05050f;
+  background: var(--neon-cyan);
+  border-color: transparent;
+}
+.saveBtn:hover { filter: brightness(1.15); }
+
+.testBtn {
+  color: var(--neon-cyan);
+  background: transparent;
+  border-color: rgba(0, 240, 255, 0.3);
+}
+.testBtn:hover { background: rgba(0, 240, 255, 0.1); }
+
+.secondaryBtn {
+  color: var(--text-secondary);
+  background: transparent;
+  border-color: rgba(255, 255, 255, 0.15);
+}
+.secondaryBtn:hover {
+  color: var(--neon-cyan);
+  border-color: rgba(0, 240, 255, 0.4);
+}
+
+.deleteBtn {
+  color: #ff3355;
+  background: transparent;
+  border-color: rgba(255, 51, 85, 0.3);
+  margin-left: auto;
+}
+.deleteBtn:hover { background: rgba(255, 51, 85, 0.1); }
+
+.saveBtn:disabled, .testBtn:disabled, .secondaryBtn:disabled, .deleteBtn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.okText {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-family: var(--font-mono);
+  font-size: 10px;
+  color: var(--neon-green);
+}
+
+.errorText {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-family: var(--font-mono);
+  font-size: 10px;
+  color: #ff3355;
+}
+
+/* ---- Add connection ---- */
+.addRow {
+  display: flex;
+  justify-content: flex-end;
+  margin-top: var(--sp-3);
+}
+
+.addBtn {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 7px 14px;
+  background: linear-gradient(135deg, var(--neon-cyan), var(--neon-magenta));
+  border: none;
+  color: #05050f;
+  font-family: var(--font-display);
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 1.5px;
+  text-transform: uppercase;
+  border-radius: 4px;
+  cursor: pointer;
+}
+
+.addBtn:hover { filter: brightness(1.15); }
+
+/* ---- Modal form ---- */
+.form {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  min-width: 400px;
+}
+
+.modalActions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 10px;
+  margin-top: 4px;
+}

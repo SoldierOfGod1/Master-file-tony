@@ -1,0 +1,109 @@
+/* ============================================================
+   ActivityFeedPage — page-specific layout.
+   ============================================================ */
+
+.filterRow {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+.filterBtn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 12px;
+  font-family: var(--font-display);
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 1.5px;
+  text-transform: uppercase;
+  color: var(--text-secondary);
+  background: rgba(8, 14, 28, 0.6);
+  border: 1px solid rgba(0, 240, 255, 0.2);
+  border-radius: 4px;
+  cursor: pointer;
+  transition: all 160ms var(--ease-out);
+}
+
+.filterBtn:hover {
+  color: var(--neon-cyan);
+  border-color: rgba(0, 240, 255, 0.5);
+}
+
+.filterBtnActive {
+  color: var(--neon-cyan);
+  background: rgba(0, 240, 255, 0.12);
+  border-color: var(--neon-cyan);
+  box-shadow: 0 0 8px rgba(0, 240, 255, 0.25);
+}
+
+.filterCount {
+  padding: 1px 5px;
+  font-size: 9px;
+  background: rgba(0, 240, 255, 0.18);
+  border-radius: 2px;
+}
+
+.feedList {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  max-height: calc(100vh - 320px);
+  overflow-y: auto;
+  font-family: var(--font-mono);
+}
+
+.feedList::-webkit-scrollbar { width: 6px; }
+.feedList::-webkit-scrollbar-track { background: rgba(0, 0, 0, 0.25); }
+.feedList::-webkit-scrollbar-thumb { background: rgba(0, 240, 255, 0.35); border-radius: 3px; }
+
+.row {
+  display: grid;
+  grid-template-columns: 60px 8px 14px minmax(80px, auto) 1fr;
+  gap: 10px;
+  align-items: center;
+  padding: 6px 8px;
+  border-left: 2px solid rgba(0, 240, 255, 0.1);
+  font-size: 11px;
+  transition: border-color 160ms, background 160ms;
+}
+
+.row:hover {
+  border-left-color: rgba(0, 240, 255, 0.5);
+  background: rgba(0, 240, 255, 0.03);
+}
+
+.time {
+  color: var(--text-muted);
+  font-size: 10px;
+  letter-spacing: 0.3px;
+}
+
+.dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+}
+
+.agentChip {
+  font-size: 9px !important;
+}
+
+.message {
+  color: var(--text-primary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  letter-spacing: 0.2px;
+}
+
+.empty {
+  padding: 40px;
+  text-align: center;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--text-muted);
+  font-style: italic;
+  letter-spacing: 0.5px;
+}
