@@ -1,0 +1,25 @@
+# SIT probe input for scripts/probe-sim-cascade.py
+# One customer per line with a scenario tag in square brackets.
+# Pick real SIT customers (NOT prod — this probe runs while the backend
+# is pointed at whatever DB cluster is configured). Commit your real
+# probe inputs next to the probe output in docs/axiom/ if and only if
+# the emails are not PII-sensitive in the SIT environment.
+#
+# Recommended minimum: 3 non-happy probes + 1 happy baseline.
+# Scenario tags are free-form — suggested set below.
+
+# ── happy baseline ─────────────────────────────────────────────
+[happy]  baptista.manuel@rain.co.za
+
+# ── service-domain: customers whose SIM went through the service flow ─
+[swap]   # recent SIM swap — insert SIT email
+[port]   # number-ported in — insert SIT email
+[move]   # SIM moved between accounts — insert SIT email
+
+# ── edge cases ────────────────────────────────────────────────
+[suspended]       # ACTIVE billing, SUSPENDED product — insert SIT email
+[override-active] # IMSIOverride row present — insert SIT email
+[multi-sim]       # rainOne household with 3+ SIMs — insert SIT email
+
+# ── negative controls ─────────────────────────────────────────
+[no-account]  nobody-has-this-email-in-sit@example.com
