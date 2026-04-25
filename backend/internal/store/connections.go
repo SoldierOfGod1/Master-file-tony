@@ -19,6 +19,15 @@ type Connection struct {
 	Password  string `json:"password"`
 	SSLMode   string `json:"ssl_mode"`
 	IsPrimary bool   `json:"is_primary"`
+
+	// Optional read-only replica. When populated, read-heavy queries
+	// (customer lookup fan-outs, sales poller CTEs) route here
+	// instead of the primary — protecting replication lag on the
+	// primary. User same credentials + same database; only host/port
+	// differ. Empty means "use primary for reads too" (today's
+	// behaviour, for backward compat).
+	ReadReplicaHost string `json:"read_replica_host,omitempty"`
+	ReadReplicaPort string `json:"read_replica_port,omitempty"`
 }
 
 // Filled returns true if the connection has enough fields to open a pool.
@@ -248,6 +257,21 @@ func defaultConnections() []Connection {
 			Port:     "8123", // ClickHouse HTTP interface
 			Database: "default",
 			User:     "service.neo",
+			SSLMode:  "disable",
+		},
+		{
+			// Huawei GaussDB DWS — wire-compatible with Postgres so
+			// the existing dbhealth probe works against it as-is.
+			// Mirrors Axiom's posture: P1 priority via the
+			// gaussdb-prefixed ID below, monitored on the same
+			// 90s/180s cadence with the same alert rules.
+			ID:       "gaussdb-prod",
+			Label:    "GaussDB DWS · PROD",
+			Driver:   "postgres",
+			Host:     "10.20.48.183",
+			Port:     "8000",
+			Database: "gaussdb",
+			User:     "antonio",
 			SSLMode:  "disable",
 		},
 	}
