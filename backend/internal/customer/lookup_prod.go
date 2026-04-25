@@ -244,7 +244,8 @@ func LookupProd(ctx context.Context, mgr *Manager, log *slog.Logger, mode, value
 			}
 			custPool, _, err := mgr.PoolByIDWithDB(c, connID, "customer")
 			if err != nil { return 0, err }
-			imsis := resolveIMSIs(c, mgr, connID, custPool, resp, log, individualID, "cdr_usage")
+			srcs := resolveIMSIs(c, mgr, connID, custPool, resp, log, individualID, "cdr_usage")
+			imsis := imsiInts(srcs)
 			if len(imsis) == 0 { return 0, nil }
 			rows, err := ath.UsageSince(c, imsis)
 			if err != nil {
@@ -262,7 +263,8 @@ func LookupProd(ctx context.Context, mgr *Manager, log *slog.Logger, mode, value
 			// latest policy/quota row per IMSI.
 			custPool, _, err := mgr.PoolByIDWithDB(c, connID, "customer")
 			if err != nil { return 0, err }
-			imsis := resolveIMSIs(c, mgr, connID, custPool, resp, log, individualID, "usage")
+			srcs := resolveIMSIs(c, mgr, connID, custPool, resp, log, individualID, "usage")
+			imsis := imsiInts(srcs)
 			if len(imsis) == 0 { return 0, nil }
 			pool, _, err := mgr.PoolByIDWithDB(c, connID, "resource")
 			if err != nil { return 0, err }
@@ -317,6 +319,15 @@ func LookupProd(ctx context.Context, mgr *Manager, log *slog.Logger, mode, value
 		}()
 	}
 	wg.Wait()
+
+	// Fail-closed POPIA audit gate (eng-review 2A). If any
+	// resolveIMSIs call set the audit-failed flag during fan-out,
+	// refuse to return Customer360 — the caller will surface 500
+	// to the HTTP layer. Better to deny the lookup entirely than
+	// to serve customer data without an audit trail.
+	if resp.AuditFailed() {
+		return nil, fmt.Errorf("imsi audit write failed; refusing to serialise customer 360 (POPIA fail-closed)")
+	}
 
 	// Ensure every slice is non-nil so the JSON response encodes as `[]`
 	// rather than `null` — keeps the frontend's `.length` / `.map` calls
@@ -1310,18 +1321,46 @@ func fetchIMSIsByMSISDN(ctx context.Context, pool *pgxpool.Pool, phones []string
 //
 // Audit (Phase 3, docs/axiom/sim-diagnostics-plan.md): every call
 // emits a row to imsi_lookup_audit. The named return + deferred
-// writeIMSIAudit captures whichever pivot won. Best-effort wiring
-// here — Phase 2 will flip the public signature to propagate audit
-// errors as fail-closed HTTP 500s.
-func resolveIMSIs(ctx context.Context, mgr *Manager, connID string, custPool *pgxpool.Pool, resp *Customer360, log *slog.Logger, individualID, source string) (imsis []int64) {
+// writeIMSIAudit captures whichever pivot won.
+//
+// Phase 2 (eng-review 1B + 2A): returns []IMSISource carrying the
+// winning phase per IMSI, plus a fail-closed audit error. If the
+// audit write fails, resp.MarkAuditFailed() flips the fail-closed
+// flag — LookupProd refuses to serialise Customer360 in that case.
+//
+// SimDiagnostics is populated once per LookupProd: this helper
+// fills resp.SimDiagnostics on first call (when it's empty).
+// Subsequent calls (cdr_usage path after usage path, etc.) just
+// reuse the data and don't overwrite.
+func resolveIMSIs(ctx context.Context, mgr *Manager, connID string, custPool *pgxpool.Pool, resp *Customer360, log *slog.Logger, individualID, source string) (sources []IMSISource) {
 	winningPhase := "exhausted"
 	defer func() {
+		// Populate panel-facing diagnostics once per LookupProd.
+		// resolveIMSIs is called by both the cdr_usage and usage
+		// fetches — only the first one fills the slice.
+		if len(resp.SimDiagnostics) == 0 && len(sources) > 0 {
+			resp.SimDiagnostics = append(resp.SimDiagnostics, sources...)
+		}
 		if mgr != nil {
-			if err := writeIMSIAudit(ctx, mgr.LocalDB(), individualID, source, winningPhase, len(imsis)); err != nil && log != nil {
-				log.Warn("imsi audit write", "error", err, "source", source, "phase", winningPhase)
+			if err := writeIMSIAudit(ctx, mgr.LocalDB(), individualID, source, winningPhase, len(sources)); err != nil {
+				if log != nil {
+					log.Error("imsi audit write FAILED — fail-closed engaged", "error", err, "source", source, "phase", winningPhase)
+				}
+				if resp != nil {
+					resp.MarkAuditFailed()
+				}
 			}
 		}
 	}()
+
+	now := time.Now().UTC()
+	build := func(phase string, imsis []int64) []IMSISource {
+		out := make([]IMSISource, 0, len(imsis))
+		for _, v := range imsis {
+			out = append(out, IMSISource{IMSI: v, Source: phase, ResolvedAt: now})
+		}
+		return out
+	}
 
 	// Phase 0: manual override. When the operator knows the IMSIs
 	// for a customer (common for VIP accounts, internal test
@@ -1336,7 +1375,7 @@ func resolveIMSIs(ctx context.Context, mgr *Manager, connID string, custPool *pg
 				"imsis", len(resp.IMSIOverrides), "source", "override")
 		}
 		winningPhase = "override"
-		imsis = append([]int64(nil), resp.IMSIOverrides...)
+		sources = build("override", append([]int64(nil), resp.IMSIOverrides...))
 		return
 	}
 	finAccts := make([]string, 0, len(resp.BillingAccounts))
@@ -1364,7 +1403,7 @@ func resolveIMSIs(ctx context.Context, mgr *Manager, connID string, custPool *pg
 					"imsis", len(prodImsis), "source", "product_path")
 			}
 			winningPhase = "product_path"
-			imsis = prodImsis
+			sources = build("product_path", prodImsis)
 			return
 		}
 	}
@@ -1381,7 +1420,7 @@ func resolveIMSIs(ctx context.Context, mgr *Manager, connID string, custPool *pg
 				"imsis", len(acctImsis), "source", "account")
 		}
 		winningPhase = "view_account"
-		imsis = acctImsis
+		sources = build("view_account", acctImsis)
 		return
 	}
 	// Fallback 1: contact_medium phones → view.msisdn.
@@ -1398,7 +1437,7 @@ func resolveIMSIs(ctx context.Context, mgr *Manager, connID string, custPool *pg
 					"imsis", len(msisdnImsis), "source", "msisdn")
 			}
 			winningPhase = "view_msisdn"
-			imsis = msisdnImsis
+			sources = build("view_msisdn", msisdnImsis)
 			return
 		}
 	}
@@ -1414,9 +1453,21 @@ func resolveIMSIs(ctx context.Context, mgr *Manager, connID string, custPool *pg
 	}
 	if len(subImsis) > 0 {
 		winningPhase = "view_subscriber"
+		sources = build("view_subscriber", subImsis)
 	}
-	imsis = subImsis
 	return
+}
+
+// imsiInts unwraps IMSISource records into the bare []int64 the
+// downstream Athena / resource_policy fetchers expect. Side-step
+// for callers that don't care about provenance — most of the
+// existing code only needs the IMSI int.
+func imsiInts(srcs []IMSISource) []int64 {
+	out := make([]int64, 0, len(srcs))
+	for _, s := range srcs {
+		out = append(out, s.IMSI)
+	}
+	return out
 }
 
 // writeIMSIAudit persists one row per resolveIMSIs call. POPIA
