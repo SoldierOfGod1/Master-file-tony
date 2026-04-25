@@ -6,8 +6,10 @@ import (
 	"fmt"
 	"log/slog"
 	"os"
+	"strings"
 	"time"
 
+	"github.com/SoldierOfGod1/command-centre/internal/athena"
 	"github.com/SoldierOfGod1/command-centre/internal/chat"
 	"github.com/SoldierOfGod1/command-centre/internal/clickup"
 	"github.com/SoldierOfGod1/command-centre/internal/config"
@@ -15,6 +17,9 @@ import (
 	"github.com/SoldierOfGod1/command-centre/internal/discord"
 	"github.com/SoldierOfGod1/command-centre/internal/event"
 	"github.com/SoldierOfGod1/command-centre/internal/logging"
+	"github.com/SoldierOfGod1/command-centre/internal/platforms"
+	"github.com/SoldierOfGod1/command-centre/internal/runner"
+	"github.com/SoldierOfGod1/command-centre/internal/sales"
 	"github.com/SoldierOfGod1/command-centre/internal/server"
 	"github.com/SoldierOfGod1/command-centre/internal/skills"
 	"github.com/SoldierOfGod1/command-centre/internal/store"
@@ -41,6 +46,16 @@ func main() {
 		os.Exit(1)
 	}
 	defer db.Close()
+
+	// Now that the DB handle exists, upgrade the logger to one that
+	// mirrors WARN+ records into log_entries. The buffered sink is
+	// fire-and-forget, so no meaningful latency is added to the
+	// hot path. Existing `log.Info(...)` calls continue to go to
+	// stdout via the inner JSON handler.
+	if wrapped, sink := logging.NewLoggerWithDB(cfg.Logging.Level, cfg.Logging.ServiceName, db.DB); sink != nil {
+		log = wrapped
+		defer sink.Close()
+	}
 
 	if err := db.SeedIfEmpty(); err != nil {
 		log.Error("seed failed", "error", err)
@@ -73,6 +88,11 @@ func main() {
 	hub := ws.NewHub(log, bus)
 	go hub.Run()
 
+	// Activity-feed publisher: writes into feed_events and
+	// broadcasts on the bus so the Activity Feed tab + Dashboard
+	// card populate on real user actions.
+	feedPub := event.NewPublisher(db.DB, bus, log)
+
 	// Chat system. Executor records token usage into cost_records on every
 	// successful run so the Dashboard KPI tiles have real data to show.
 	executor := chat.NewExecutorWithDB(log, bus, db.DB)
@@ -81,6 +101,51 @@ func main() {
 	// Customer 360 — pgx pool manager for Axiom lookups.
 	customerMgr := customer.NewManager(db)
 	defer customerMgr.Close()
+
+	// Athena CDR usage — optional. Reads ATHENA_* env vars; if
+	// ATHENA_OUTPUT is empty the client is nil and the Customer 360
+	// usage panel silently skips the CDR source. Default region
+	// eu-west-1 matches rain's Athena workgroup. Queries cost money
+	// per GB scanned, so UsageService caches 30 min per IMSI set.
+	// Athena config: app_settings wins over env. Lets the Settings
+	// page overwrite AWS region / S3 output location without a
+	// config.toml or shell restart — on next backend restart the
+	// values take effect.
+	appSettings, _ := db.GetAllSettings()
+	if appSettings == nil {
+		appSettings = map[string]string{}
+	}
+	// If the user put AWS creds in app_settings, put them in env
+	// so the SDK's default credential chain picks them up without
+	// us having to write a custom credential provider.
+	if v := appSettings["athena.aws_access_key_id"]; v != "" {
+		_ = os.Setenv("AWS_ACCESS_KEY_ID", v)
+	}
+	if v := appSettings["athena.aws_secret_access_key"]; v != "" {
+		_ = os.Setenv("AWS_SECRET_ACCESS_KEY", v)
+	}
+	// Session token is required when the access key is an ASIA-prefixed
+	// temporary credential (SSO / AssumeRole). The AWS SDK's static
+	// credential provider picks up all three from env.
+	if v := appSettings["athena.aws_session_token"]; v != "" {
+		_ = os.Setenv("AWS_SESSION_TOKEN", v)
+	}
+	athenaCfg := athena.ConfigFromSources(appSettings, os.Getenv)
+	if athenaCfg.Enabled() {
+		athClient, aerr := athena.New(context.Background(), athenaCfg)
+		if aerr != nil {
+			log.Warn("athena init failed — CDR usage panel disabled",
+				"error", aerr, "region", athenaCfg.Region)
+		} else {
+			customerMgr.SetAthenaUsage(&athenaUsageAdapter{svc: athena.NewUsageService(athClient)})
+			log.Info("athena usage enabled",
+				"region", athenaCfg.Region,
+				"database", athenaCfg.Database,
+				"workgroup", athenaCfg.Workgroup)
+		}
+	} else {
+		log.Info("athena usage disabled — set ATHENA_OUTPUT (+ AWS creds) to enable")
+	}
 
 	// ClickUp sync engine — owns the 60s poller goroutine + inline push path.
 	syncEngine := sync.New(db, log, bus)
@@ -97,6 +162,59 @@ func main() {
 	projectDir, _ := os.Getwd()
 	go mcpHealth.Run(ctx, projectDir)
 
+	// Platform monitor — rain BSS middleware (Snowflake) + satellite apps +
+	// DB health. SQLite-backed history drives 24h/7d/30d uptime rollups;
+	// the same SQLAlertSink powers the /service page's alert feed and
+	// auto-creates incidents on severity >= Critical.
+	//
+	// Kill-switch: PLATFORM_MONITOR_ENABLED=false disables every check
+	// (HTTP + DB) but leaves the API routes up so the UI still renders
+	// the last-known snapshot rather than an error.
+	platformMon := platforms.NewMonitor(log, 60*time.Second, nil)
+	sqlSink := platforms.NewSQLAlertSink(db.DB, log)
+	// Email notifier: sends on every Critical/P1 alert when
+	// RAIN_ALERT_SMTP_* env vars are set. Falls back to nil (no
+	// email) when env is missing — safe for dev. Closes the
+	// 2026-04-24 gap where Axiom went down and only the dashboard
+	// knew. See backend/internal/platforms/email_sink.go.
+	var emailSink platforms.AlertSink
+	if e, err := platforms.NewEmailSinkFromEnv(log); err != nil {
+		log.Info("email alerts disabled", "reason", err)
+	} else {
+		emailSink = e
+		log.Info("email alerts ENABLED for Critical/P1 — recipients configured via RAIN_ALERT_TO")
+	}
+	alertSink := platforms.AlertSink(platforms.NewMultiSink(sqlSink, emailSink))
+	platformMon.SetHistory(platforms.NewSQLHistory(db.DB))
+	platformMon.SetAlertSink(alertSink)
+	dbMon := platforms.NewDBMonitor(log, customerMgr, db)
+	dbMon.SetAlertSink(alertSink)
+	if v := strings.ToLower(strings.TrimSpace(os.Getenv("PLATFORM_MONITOR_ENABLED"))); v == "false" || v == "0" || v == "no" {
+		log.Warn("platform monitor DISABLED via PLATFORM_MONITOR_ENABLED — snapshots frozen at last-known")
+	} else {
+		go platformMon.Run(ctx)
+		go dbMon.Run(ctx)
+	}
+
+	// Projects Runner — launches local dev servers (frontend + backend)
+	// from the Projects page. StopAll on shutdown so Command Centre never
+	// leaves an orphan npm/go process holding a port.
+	runMgr := runner.NewManager(log, bus)
+	defer runMgr.StopAll()
+
+	// rain Sales — background poller serves the dashboard snapshot.
+	// Runs on ctx so it exits cleanly on shutdown. Kill-switch:
+	// set SALES_POLL_ENABLED=false to skip the auto-poll entirely;
+	// the /api/v1/sales/refresh endpoint (+ UI button) still works
+	// so an operator can fetch on demand during an Axiom incident.
+	salesPoller := sales.NewPoller(customerMgr, log)
+	if v := strings.ToLower(strings.TrimSpace(os.Getenv("SALES_POLL_ENABLED"))); v == "false" || v == "0" || v == "no" {
+		log.Warn("sales poller auto-start DISABLED via SALES_POLL_ENABLED — dashboard will only update when refreshed manually")
+	} else {
+		go salesPoller.Start(ctx)
+		defer salesPoller.Stop()
+	}
+
 	api := &server.API{
 		DB:          db.DB,
 		Store:       db,
@@ -108,8 +226,19 @@ func main() {
 		SyncEngine:  syncEngine,
 		CustomerMgr: customerMgr,
 		MCPHealth:   mcpHealth,
+		PlatformMon: platformMon,
+		DBHealth:    dbMon,
+		Runner:      runMgr,
+		SalesPoller: salesPoller,
+		Feed:        feedPub,
 		StartTime:   time.Now(),
 	}
+
+	// Liveness heartbeat — the /health/live handler returns 503 if
+	// this goroutine stops flipping the timestamp (a proxy for a
+	// deadlocked main loop). Previously the handler was an
+	// unconditional 200, useless for detecting deadlocks.
+	server.Heartbeat(ctx)
 
 	// Start Discord bot if configured
 	go startDiscordBot(db.DB, queueMgr, log, bus)
@@ -221,4 +350,36 @@ func ensureClickUpStatuses(s *store.Store, log *slog.Logger) {
 		return
 	}
 	log.Info("clickup statuses ensured", "list_id", listID, "count", len(clickup.ProjectStatuses))
+}
+
+// athenaUsageAdapter bridges athena.UsageService → the
+// customer.UsageLookerUpper interface. Keeps the customer package
+// free of an Athena import, breaking the cycle.
+type athenaUsageAdapter struct {
+	svc *athena.UsageService
+}
+
+func (a *athenaUsageAdapter) Available() bool { return a != nil && a.svc != nil && a.svc.Available() }
+
+func (a *athenaUsageAdapter) UsageSince(ctx context.Context, imsis []int64) ([]customer.CDRUsage, error) {
+	if !a.Available() {
+		return nil, nil
+	}
+	rows, err := a.svc.UsageSince(ctx, imsis)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]customer.CDRUsage, 0, len(rows))
+	for _, r := range rows {
+		out = append(out, customer.CDRUsage{
+			Date:           r.Date,
+			AccountCode:    r.AccountCode,
+			BillingAccount: r.BillingAccount,
+			IMEI:           r.IMEI,
+			IMSI:           r.IMSI,
+			MSISDN:         r.MSISDN,
+			UsageGB:        r.UsageGB,
+		})
+	}
+	return out, nil
 }
