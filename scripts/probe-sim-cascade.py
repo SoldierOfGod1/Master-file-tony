@@ -49,6 +49,15 @@ from typing import Iterable
 BASE = "http://127.0.0.1:8080/api/v1"
 SCENARIO_RE = re.compile(r"^\s*\[([^\]]+)\]\s*(.+?)\s*$")
 
+# SAFETY: refuse to run if the backend's primary connection isn't SIT-like.
+# Rain has multiple Axiom clusters — prod, SIT-BSS, SIT-cluster. The primary
+# is what `/api/v1/axiom/*` and `/api/v1/customer/360` route to. Running this
+# probe against prod would emit real customer IMSIs into the coverage report,
+# which then gets committed to git. That's the POPIA breach pattern we're
+# trying to prevent. Override with --i-know-what-i-am-doing for unusual setups.
+_SIT_HOST_HINTS = ("sit", "-sit.", ".sit.", "staging", "-stg.", ".stg.")
+_PROD_HOST_HINTS = ("prod", "-prod.", ".prod.", ".rain.co.za")
+
 
 @dataclass(frozen=True)
 class ProbeInput:
@@ -245,11 +254,72 @@ def _implications(results: list[ProbeResult]) -> str:
     return "\n".join(bullets)
 
 
+def _assert_sit_primary(force: bool) -> None:
+    """Refuse to run unless the backend's primary Axiom connection is SIT-like."""
+    try:
+        data = _get("connections")
+    except RuntimeError as e:
+        print(
+            f"cannot verify cluster ({e}). Refusing to run against an unknown "
+            f"target. Re-run with --i-know-what-i-am-doing if you've verified manually.",
+            file=sys.stderr,
+        )
+        if not force:
+            raise SystemExit(3)
+        return
+
+    primary = next((c for c in data if c.get("is_primary")), None)
+    if not primary:
+        print("no primary connection configured; refusing to probe.", file=sys.stderr)
+        if not force:
+            raise SystemExit(3)
+        return
+
+    host = (primary.get("host") or "").lower()
+    label = primary.get("label") or primary.get("id") or "<unknown>"
+    looks_sit = any(h in host for h in _SIT_HOST_HINTS)
+    looks_prod = any(h in host for h in _PROD_HOST_HINTS) and not looks_sit
+
+    print(f"backend primary: {label}  host={host}", file=sys.stderr)
+
+    if looks_prod:
+        print(
+            "\n!!! primary looks like PROD !!!\n"
+            f"   host: {host}\n"
+            "Running this probe would emit real customer IMSIs into the\n"
+            "coverage report. That is a POPIA incident waiting to happen.\n"
+            "Switch the backend's primary connection to a SIT cluster and\n"
+            "re-run. To override (rare — e.g. a SIT host that contains\n"
+            "'prod' for some reason), pass --i-know-what-i-am-doing.\n",
+            file=sys.stderr,
+        )
+        if not force:
+            raise SystemExit(3)
+        return
+
+    if not looks_sit:
+        print(
+            f"primary host ({host}) doesn't match known SIT naming. "
+            f"Refusing to run. Pass --i-know-what-i-am-doing if correct.",
+            file=sys.stderr,
+        )
+        if not force:
+            raise SystemExit(3)
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--emails", required=True, help="Path to emails file, or '-' for stdin")
     ap.add_argument("--out", required=True, help="Output markdown path (typically docs/axiom/sim-cascade-coverage.md)")
+    ap.add_argument(
+        "--i-know-what-i-am-doing",
+        dest="force",
+        action="store_true",
+        help="Bypass the SIT-only primary-connection guard (rare; POPIA risk).",
+    )
     args = ap.parse_args()
+
+    _assert_sit_primary(args.force)
 
     if args.emails == "-":
         source = sys.stdin
