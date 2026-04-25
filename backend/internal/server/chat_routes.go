@@ -22,12 +22,36 @@ func RegisterChatRoutes(mux *http.ServeMux, api *API) {
 	// Conversation export
 	mux.HandleFunc("GET /api/v1/conversations/{id}/export", api.handleExportConversation)
 
+	// Real token usage per conversation (backs the Context Gauge)
+	mux.HandleFunc("GET /api/v1/conversations/{id}/usage", api.handleConversationUsage)
+
 	// Chat execution
 	mux.HandleFunc("POST /api/v1/chat", api.handleChat)
+
+	// Phase A1 — intent classifier. Cheap (no LLM, regex+keyword
+	// match), so the frontend can call it on every keystroke /
+	// after debounce to show "I think you want X" before commit.
+	// See backend/internal/chat/intent.go for the rules.
+	mux.HandleFunc("POST /api/v1/chat/classify", api.handleClassifyIntent)
 
 	// Chat config
 	mux.HandleFunc("GET /api/v1/chat/config", api.handleGetChatConfig)
 	mux.HandleFunc("PUT /api/v1/chat/config", api.handleUpdateChatConfig)
+}
+
+// handleClassifyIntent runs ClassifyIntent over a prompt and
+// returns the structured result. Used by the frontend to render
+// "I'll route this to <intent>" badges and by Phase A2's tool
+// catalogue to short-circuit Claude when a fast path is available.
+func (a *API) handleClassifyIntent(w http.ResponseWriter, r *http.Request) {
+	var body struct {
+		Prompt string `json:"prompt"`
+	}
+	if err := readJSON(r, &body); err != nil {
+		jsonError(w, 400, "invalid json")
+		return
+	}
+	jsonOK(w, chat.ClassifyIntent(body.Prompt))
 }
 
 // ── Conversations ────────────────────────────────────────
@@ -305,4 +329,45 @@ func (a *API) handleUpdateChatConfig(w http.ResponseWriter, r *http.Request) {
 	}
 
 	jsonOK(w, map[string]string{"status": "updated"})
+}
+
+// handleConversationUsage returns real token totals for one conversation.
+// Reads from cost_records (written by chat.RecordUsage after each Claude
+// CLI run). Drives the real-valued Context Gauge in ChatPage.
+func (a *API) handleConversationUsage(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	if id == "" {
+		jsonError(w, http.StatusBadRequest, "conversation id required")
+		return
+	}
+	var input, output, total int
+	var cost float64
+	err := a.DB.QueryRow(
+		`SELECT COALESCE(SUM(input_tokens),0),
+		        COALESCE(SUM(output_tokens),0),
+		        COALESCE(SUM(tokens_used),0),
+		        COALESCE(SUM(amount_zar),0)
+		 FROM cost_records WHERE conversation_id=?`, id,
+	).Scan(&input, &output, &total, &cost)
+	if err != nil {
+		jsonError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	// Also surface the most recent model hint so the UI picks the correct
+	// context-window ceiling without a second round-trip.
+	var model string
+	_ = a.DB.QueryRow(
+		`SELECT model_name FROM cost_records
+		 WHERE conversation_id=? AND model_name != ''
+		 ORDER BY id DESC LIMIT 1`, id,
+	).Scan(&model)
+
+	jsonOK(w, map[string]any{
+		"conversation_id": id,
+		"input_tokens":    input,
+		"output_tokens":   output,
+		"total_tokens":    total,
+		"amount_zar":      cost,
+		"model":           model,
+	})
 }
