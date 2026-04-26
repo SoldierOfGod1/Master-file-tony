@@ -33,6 +33,76 @@ const DRIVERS: { value: DBDriver; label: string; note: string }[] = [
   { value: 'clickhouse', label: 'ClickHouse', note: 'Reserved slot — queries not wired yet. Still useful to pre-seed creds.' },
 ];
 
+/* Connection presets — one-click prefill for new connections.
+   Saves the user typing host/port/database for the canonical
+   rain clusters. Custom = blank. Adding a new preset here is the
+   right place for any new BSS-critical DB the platform monitor
+   should treat as P1 (the id-prefix decides — see backend
+   platforms/dbhealth.go CRITICAL_DB_PREFIXES). */
+interface ConnectionPreset {
+  readonly id: string;
+  readonly label: string;
+  readonly hint: string;
+  readonly driver: DBDriver;
+  readonly host: string;
+  readonly port: string;
+  readonly database: string;
+  readonly sslMode: string;
+}
+
+const CONNECTION_PRESETS: readonly ConnectionPreset[] = [
+  {
+    id: 'gaussdb-prod',
+    label: 'Huawei GaussDB DWS · PROD',
+    hint: 'Wire-compatible with Postgres. Monitored at P1 priority alongside Axiom.',
+    driver: 'postgres',
+    host: '10.20.48.183',
+    port: '8000',
+    database: 'gaussdb',
+    sslMode: 'disable',
+  },
+  {
+    id: 'axiom-prod',
+    label: 'Axiom · PROD',
+    hint: 'rain BSS prod cluster. Read-only access; writes route through Snowflake middleware.',
+    driver: 'postgres',
+    host: 'axiom-prod-pg-cluster.rain.co.za',
+    port: '5433',
+    database: 'postgresdb',
+    sslMode: 'require',
+  },
+  {
+    id: 'axiom-sit-cluster',
+    label: 'Axiom SIT · Cluster',
+    hint: 'SIT mirror. Use this for the SIM cascade probe and any agent dev work.',
+    driver: 'postgres',
+    host: 'sit-pg-cluster.rain.co.za',
+    port: '5433',
+    database: 'postgresdb',
+    sslMode: 'disable',
+  },
+  {
+    id: 'axiom-sit-bss',
+    label: 'Axiom BSS · SIT',
+    hint: 'BSS-flavoured SIT instance.',
+    driver: 'postgres',
+    host: 'bss-psql-sit-01.rain.network',
+    port: '5432',
+    database: 'postgresdb',
+    sslMode: 'disable',
+  },
+  {
+    id: 'clickhouse-main',
+    label: 'ClickHouse · HouseOfClicks',
+    hint: 'rain analytics.',
+    driver: 'clickhouse',
+    host: 'houseofclicks.rain.co.za',
+    port: '8123',
+    database: 'default',
+    sslMode: 'disable',
+  },
+];
+
 function isMasked(v: string): boolean {
   return v.startsWith('••');
 }
@@ -287,6 +357,7 @@ function NewConnectionForm({ onCreated, onClose }: {
   readonly onCreated: () => void;
   readonly onClose: () => void;
 }) {
+  const [presetId, setPresetId] = useState<string>('');
   const [label, setLabel] = useState('');
   const [driver, setDriver] = useState<DBDriver>('postgres');
   const [host, setHost] = useState('');
@@ -296,6 +367,19 @@ function NewConnectionForm({ onCreated, onClose }: {
   const [password, setPassword] = useState('');
   const [sslMode, setSslMode] = useState('disable');
   const [submitting, setSubmitting] = useState(false);
+
+  const applyPreset = useCallback((id: string) => {
+    setPresetId(id);
+    if (id === '') return;
+    const p = CONNECTION_PRESETS.find((x) => x.id === id);
+    if (!p) return;
+    setLabel(p.label);
+    setDriver(p.driver);
+    setHost(p.host);
+    setPort(p.port);
+    setDatabase(p.database);
+    setSslMode(p.sslMode);
+  }, []);
 
   const submit = useCallback(async (e: FormEvent) => {
     e.preventDefault();
@@ -319,6 +403,25 @@ function NewConnectionForm({ onCreated, onClose }: {
 
   return (
     <form onSubmit={submit} className={styles.form}>
+      <div className={styles.field}>
+        <label className={styles.label}>Preset</label>
+        <select
+          className={styles.input}
+          value={presetId}
+          onChange={(e) => applyPreset(e.target.value)}
+        >
+          <option value="">Custom (start blank)</option>
+          {CONNECTION_PRESETS.map((p) => (
+            <option key={p.id} value={p.id}>{p.label}</option>
+          ))}
+        </select>
+        <div className={styles.hint}>
+          {presetId
+            ? CONNECTION_PRESETS.find((p) => p.id === presetId)?.hint ?? ''
+            : 'Pick a preset to prefill the canonical rain hosts, or leave blank for a custom connection.'}
+        </div>
+      </div>
+
       <div className={styles.field}>
         <label className={styles.label}>Label</label>
         <input
