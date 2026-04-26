@@ -566,6 +566,5 @@ func buildDeepLinks(id string) DeepLinks {
 	return DeepLinks{
 		Station: "https://www.the101.info/customer/" + id,
 		Athena:  "https://assisted-sales.athena.rain.co.za/customer/" + id,
-		Raingo:  "https://www.raingo.co.za/app/customers/" + id,
 	}
 }

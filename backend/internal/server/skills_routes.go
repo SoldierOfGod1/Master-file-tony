@@ -1,6 +1,8 @@
 package server
 
 import (
+	"encoding/json"
+	"errors"
 	"net/http"
 	"os"
 
@@ -13,6 +15,11 @@ func RegisterSkillsRoutes(mux *http.ServeMux, api *API) {
 	mux.HandleFunc("GET /api/v1/skills", api.handleListSkills)
 	mux.HandleFunc("GET /api/v1/mcp", api.handleListMCP)
 	mux.HandleFunc("GET /api/v1/mcp/health", api.handleMCPHealth)
+	// Read + write a skill file (SKILL.md). Reuses the agents scanner's
+	// sandbox — skills live under the same ~/.claude/skills or
+	// <project>/.claude/skills roots that the scanner knows.
+	mux.HandleFunc("GET /api/v1/skills/file", api.handleSkillFileRead)
+	mux.HandleFunc("POST /api/v1/skills/file", api.handleSkillFileWrite)
 }
 
 func (a *API) handleListSkills(w http.ResponseWriter, r *http.Request) {
@@ -36,4 +43,57 @@ func (a *API) handleMCPHealth(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	jsonOK(w, a.MCPHealth.Snapshot())
+}
+
+// handleSkillFileRead returns the raw contents of a sandboxed skill
+// file. Uses the agents scanner's shared allow-list (which now
+// includes ~/.claude/skills + <project>/.claude/skills).
+func (a *API) handleSkillFileRead(w http.ResponseWriter, r *http.Request) {
+	path := r.URL.Query().Get("path")
+	if path == "" {
+		jsonError(w, http.StatusBadRequest, "path query param required")
+		return
+	}
+	sc := a.newScanner()
+	body, err := sc.ReadFile(path)
+	if err != nil {
+		if errors.Is(err, os.ErrPermission) {
+			jsonError(w, http.StatusForbidden, "path outside sandbox")
+			return
+		}
+		jsonError(w, http.StatusNotFound, err.Error())
+		return
+	}
+	jsonOK(w, map[string]string{"path": path, "content": body})
+}
+
+// handleSkillFileWrite atomically overwrites a user-owned skill file.
+// Plugin-owned paths return 403.
+type skillWriteBody struct {
+	Path    string `json:"path"`
+	Content string `json:"content"`
+}
+
+func (a *API) handleSkillFileWrite(w http.ResponseWriter, r *http.Request) {
+	var body skillWriteBody
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		jsonError(w, http.StatusBadRequest, "invalid json")
+		return
+	}
+	if body.Path == "" {
+		jsonError(w, http.StatusBadRequest, "path required")
+		return
+	}
+	sc := a.newScanner()
+	if err := sc.WriteFile(body.Path, []byte(body.Content)); err != nil {
+		if errors.Is(err, os.ErrPermission) {
+			jsonError(w, http.StatusForbidden,
+				"skill is read-only (plugin-owned or outside the user .claude tree)")
+			return
+		}
+		jsonError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	updated, _ := sc.ReadFile(body.Path)
+	jsonOK(w, map[string]string{"path": body.Path, "content": updated})
 }

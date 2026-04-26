@@ -2,8 +2,10 @@ package server
 
 import (
 	"encoding/json"
+	"errors"
 	"net/http"
 	"os"
+	"strings"
 
 	"github.com/SoldierOfGod1/command-centre/internal/agents"
 )
@@ -17,6 +19,8 @@ func RegisterAgentsRoutes(mux *http.ServeMux, api *API) {
 	mux.HandleFunc("GET /api/v1/agent-fleet/file", api.handleFleetFile)
 	mux.HandleFunc("GET /api/v1/agent-fleet/memory", api.handleMemoryRead)
 	mux.HandleFunc("POST /api/v1/agent-fleet/memory", api.handleMemoryAppend)
+	mux.HandleFunc("POST /api/v1/agent-fleet/file", api.handleFleetFileWrite)
+	mux.HandleFunc("POST /api/v1/agent-fleet/agents", api.handleFleetCreateAgent)
 }
 
 // newScanner returns an agents.Scanner rooted at whichever working directory
@@ -129,4 +133,79 @@ func (a *API) handleMemoryAppend(w http.ResponseWriter, r *http.Request) {
 	}
 	content, _ := a.newScanner().ReadMemory(body.Path)
 	jsonOK(w, map[string]string{"path": body.Path, "content": content})
+}
+
+// handleFleetFileWrite atomically overwrites an agent/hook/rule/skill
+// markdown file, subject to the scanner's writable-path allow-list.
+// Plugin-owned files return 403 — the UI should clone-to-global first.
+type fleetWriteBody struct {
+	Path    string `json:"path"`
+	Content string `json:"content"`
+}
+
+func (a *API) handleFleetFileWrite(w http.ResponseWriter, r *http.Request) {
+	var body fleetWriteBody
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		jsonError(w, http.StatusBadRequest, "invalid json")
+		return
+	}
+	if body.Path == "" {
+		jsonError(w, http.StatusBadRequest, "path required")
+		return
+	}
+	sc := a.newScanner()
+	if err := sc.WriteFile(body.Path, []byte(body.Content)); err != nil {
+		if errors.Is(err, os.ErrPermission) {
+			jsonError(w, http.StatusForbidden,
+				"path is read-only (plugin-owned or outside the user .claude tree)")
+			return
+		}
+		jsonError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	// Best-effort re-read so the UI can refresh from the canonical bytes.
+	updated, _ := sc.ReadFile(body.Path)
+	jsonOK(w, map[string]string{"path": body.Path, "content": updated})
+}
+
+// handleFleetCreateAgent accepts a minimal agent spec and materialises
+// the .md file under the chosen user root (global or project).
+type fleetCreateAgentBody struct {
+	Name        string `json:"name"`
+	Description string `json:"description"`
+	Category    string `json:"category,omitempty"`
+	Source      string `json:"source"` // "global" | "project"
+	Model       string `json:"model,omitempty"`
+	Body        string `json:"body,omitempty"`
+	Overwrite   bool   `json:"overwrite,omitempty"`
+}
+
+func (a *API) handleFleetCreateAgent(w http.ResponseWriter, r *http.Request) {
+	var b fleetCreateAgentBody
+	if err := json.NewDecoder(r.Body).Decode(&b); err != nil {
+		jsonError(w, http.StatusBadRequest, "invalid json")
+		return
+	}
+	dest := agents.SourceGlobal
+	if strings.EqualFold(b.Source, "project") {
+		dest = agents.SourceProject
+	}
+	sc := a.newScanner()
+	path, err := sc.CreateAgent(agents.CreateAgentRequest{
+		Name: b.Name, Description: b.Description,
+		Category: b.Category, Dest: dest,
+		Model: b.Model, Body: b.Body, Overwrite: b.Overwrite,
+	})
+	if err != nil {
+		jsonError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	// Return the freshly-parsed agent row so the UI can splice it in.
+	for _, ag := range sc.ListAgents() {
+		if ag.Path == path {
+			jsonOK(w, ag)
+			return
+		}
+	}
+	jsonOK(w, map[string]string{"path": path})
 }

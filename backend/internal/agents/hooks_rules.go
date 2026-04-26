@@ -1,6 +1,7 @@
 package agents
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"sort"
@@ -174,19 +175,87 @@ func (s *Scanner) ReadFile(path string) (string, error) {
 // directories. Prevents the ReadFile endpoint from being abused as a
 // general file-read primitive.
 func (s *Scanner) isAllowedPath(clean string) bool {
+	return s.rootForPath(clean) != ""
+}
+
+// isWritablePath is a stricter variant of isAllowedPath — only the
+// user-owned global + project dirs may be written. Plugin/marketplace
+// copies are never writable.
+func (s *Scanner) isWritablePath(clean string) bool {
+	// .memory.md is append-only via a dedicated endpoint — never
+	// overwritten via raw file writes.
+	if strings.HasSuffix(strings.ToLower(clean), ".memory.md") {
+		return false
+	}
+	root := s.rootForPath(clean)
+	if root == "" {
+		return false
+	}
+	// Global + project agents/hooks/rules/skills only. Exclude any path
+	// under ~/.claude/plugins/** even if it happens to share the roots
+	// (defence in depth — the rootForPath list doesn't include plugins,
+	// so this should never fire, but keep the explicit guard).
+	pluginsRoot := filepath.Join(s.homeDir, ".claude", "plugins")
+	if strings.HasPrefix(clean, filepath.Clean(pluginsRoot)+string(filepath.Separator)) {
+		return false
+	}
+	return true
+}
+
+// rootForPath returns the allow-list root that contains `clean`, or ""
+// if none do. Used by both read + write paths.
+func (s *Scanner) rootForPath(clean string) string {
 	roots := []string{
 		filepath.Join(s.homeDir, ".claude", "agents"),
 		filepath.Join(s.homeDir, ".claude", "hooks"),
 		filepath.Join(s.homeDir, ".claude", "rules"),
+		filepath.Join(s.homeDir, ".claude", "skills"),
+		filepath.Join(s.homeDir, ".claude", "Skills"),
 		filepath.Join(s.projectDir, ".claude", "agents"),
 		filepath.Join(s.projectDir, ".claude", "hooks"),
 		filepath.Join(s.projectDir, ".claude", "rules"),
+		filepath.Join(s.projectDir, ".claude", "skills"),
+		filepath.Join(s.projectDir, ".claude", "Skills"),
 	}
 	for _, root := range roots {
 		cleanRoot := filepath.Clean(root)
 		if strings.HasPrefix(clean, cleanRoot+string(filepath.Separator)) || clean == cleanRoot {
-			return true
+			return cleanRoot
 		}
 	}
-	return false
+	return ""
+}
+
+// WriteFile performs an atomic write (temp-file + rename) to an
+// allow-listed path. Returns os.ErrPermission for anything outside the
+// writable set (plugin/marketplace dirs, paths trying to escape via
+// ..). Creates intermediate directories if they sit under the root.
+func (s *Scanner) WriteFile(path string, content []byte) error {
+	clean := filepath.Clean(path)
+	if !s.isWritablePath(clean) {
+		return os.ErrPermission
+	}
+	dir := filepath.Dir(clean)
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return fmt.Errorf("mkdir %s: %w", dir, err)
+	}
+	tmp, err := os.CreateTemp(dir, filepath.Base(clean)+".tmp-*")
+	if err != nil {
+		return fmt.Errorf("create temp: %w", err)
+	}
+	tmpName := tmp.Name()
+	if _, err := tmp.Write(content); err != nil {
+		tmp.Close()
+		os.Remove(tmpName)
+		return fmt.Errorf("write temp: %w", err)
+	}
+	if err := tmp.Close(); err != nil {
+		os.Remove(tmpName)
+		return fmt.Errorf("close temp: %w", err)
+	}
+	if err := os.Rename(tmpName, clean); err != nil {
+		os.Remove(tmpName)
+		return fmt.Errorf("rename %s → %s: %w", tmpName, clean, err)
+	}
+	return nil
 }

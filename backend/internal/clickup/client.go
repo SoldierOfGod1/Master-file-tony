@@ -289,19 +289,21 @@ func (c *Client) EnsureListStatuses(listID string, wanted []string) error {
 		return fmt.Errorf("clickup: parse list config: %w", err)
 	}
 
-	have := make(map[string]struct{}, len(listRaw.Statuses))
-	for _, s := range listRaw.Statuses {
-		have[strings.ToLower(s.Status)] = struct{}{}
-	}
-	missing := false
-	for _, w := range wanted {
-		if _, ok := have[strings.ToLower(w)]; !ok {
-			missing = true
-			break
+	// Compare by lowercase name AND preserve order — a status set that
+	// shares names but is in a different order wouldn't render the
+	// kanban columns we expect. Short-circuit only when current equals
+	// wanted exactly (same names, same order, same count).
+	same := len(listRaw.Statuses) == len(wanted)
+	if same {
+		for i, s := range listRaw.Statuses {
+			if !strings.EqualFold(s.Status, wanted[i]) {
+				same = false
+				break
+			}
 		}
 	}
-	if !missing && len(have) >= len(wanted) {
-		return nil // already good
+	if same {
+		return nil // already in the canonical shape
 	}
 
 	// Build the statuses payload. ClickUp accepts:
@@ -321,19 +323,72 @@ func (c *Client) EnsureListStatuses(listID string, wanted []string) error {
 		}
 		payload = append(payload, statusObj{Status: w, Type: t})
 	}
-	buf, _ := json.Marshal(map[string]any{"statuses": payload})
-	if _, err := c.do(http.MethodPut, fmt.Sprintf("%s/list/%s", baseURL, listID), bytes.NewReader(buf)); err != nil {
+	// `override_statuses: true` is mandatory — without it ClickUp silently
+	// ignores the `statuses` array because the list inherits from its
+	// parent Space. With it the list takes full ownership of its own
+	// status set, which is what gives us the 10-column kanban.
+	buf, _ := json.Marshal(map[string]any{
+		"override_statuses": true,
+		"statuses":          payload,
+	})
+	respBody, err := c.do(http.MethodPut, fmt.Sprintf("%s/list/%s", baseURL, listID), bytes.NewReader(buf))
+	if err != nil {
 		return fmt.Errorf("clickup: update list statuses: %w", err)
+	}
+	// Parse the response and confirm the server actually stored our 10
+	// statuses. If not, the list is probably still inheriting — surface
+	// that as an error instead of silently succeeding.
+	var after struct {
+		OverrideStatuses bool `json:"override_statuses"`
+		Statuses         []struct {
+			Status string `json:"status"`
+		} `json:"statuses"`
+	}
+	if jerr := json.Unmarshal(respBody, &after); jerr == nil {
+		if len(after.Statuses) != len(wanted) {
+			return fmt.Errorf(
+				"clickup accepted PUT but kept %d statuses instead of %d (override_statuses=%v) — check that the List's parent Space allows custom list statuses",
+				len(after.Statuses), len(wanted), after.OverrideStatuses,
+			)
+		}
 	}
 	return nil
 }
 
+// ListStatuses fetches the current statuses from ClickUp so callers
+// (and our own diagnostics) can see exactly what the UI will render.
+func (c *Client) ListStatuses(listID string) ([]string, bool, error) {
+	if c.token == "" {
+		return nil, false, ErrNotConfigured
+	}
+	body, err := c.do(http.MethodGet, fmt.Sprintf("%s/list/%s", baseURL, listID), nil)
+	if err != nil {
+		return nil, false, err
+	}
+	var raw struct {
+		OverrideStatuses bool `json:"override_statuses"`
+		Statuses         []struct {
+			Status string `json:"status"`
+		} `json:"statuses"`
+	}
+	if err := json.Unmarshal(body, &raw); err != nil {
+		return nil, false, fmt.Errorf("clickup: parse list: %w", err)
+	}
+	out := make([]string, 0, len(raw.Statuses))
+	for _, s := range raw.Statuses {
+		out = append(out, s.Status)
+	}
+	return out, raw.OverrideStatuses, nil
+}
+
 // CreateTaskInput is the minimal payload for a new ClickUp task.
+// Set Parent to the parent task id to create a subtask.
 type CreateTaskInput struct {
 	Name        string `json:"name"`
 	Description string `json:"description,omitempty"`
 	Status      string `json:"status,omitempty"`
 	Priority    int    `json:"priority,omitempty"` // 1=urgent … 4=low
+	Parent      string `json:"parent,omitempty"`   // parent task id → creates a subtask
 }
 
 // CreateTask posts a new task to the given list.
@@ -380,6 +435,21 @@ func (c *Client) UpdateTaskStatus(taskID, status string) error {
 	url := fmt.Sprintf("%s/task/%s", baseURL, taskID)
 	buf, _ := json.Marshal(map[string]string{"status": status})
 	_, err := c.do(http.MethodPut, url, bytes.NewReader(buf))
+	return err
+}
+
+// DeleteTask permanently removes a ClickUp task. Used when the user
+// deletes a local project so the mirrored task and its subtasks go too
+// (ClickUp cascades subtask deletion on the parent task automatically).
+func (c *Client) DeleteTask(taskID string) error {
+	if c.token == "" {
+		return ErrNotConfigured
+	}
+	if taskID == "" {
+		return errors.New("clickup: task id required")
+	}
+	url := fmt.Sprintf("%s/task/%s", baseURL, taskID)
+	_, err := c.do(http.MethodDelete, url, nil)
 	return err
 }
 

@@ -17,6 +17,11 @@ func RegisterConnectionsRoutes(mux *http.ServeMux, api *API) {
 	mux.HandleFunc("DELETE /api/v1/connections/{id}", api.handleDeleteConnection)
 	mux.HandleFunc("POST /api/v1/connections/{id}/primary", api.handleSetPrimary)
 	mux.HandleFunc("POST /api/v1/connections/{id}/test", api.handleTestConnection)
+	// Copy the stored password from one connection to another. Handy when
+	// the same LDAP secret backs several clusters — user enters it once
+	// against (say) SIT, then clones it across without re-typing.
+	// The plaintext never leaves the server process.
+	mux.HandleFunc("POST /api/v1/connections/{id}/copy-password", api.handleCopyPassword)
 }
 
 // publicConnection masks the password on the wire — full value stays in
@@ -169,4 +174,48 @@ func slugify(label string) string {
 	s := strings.ToLower(strings.TrimSpace(label))
 	s = nonAlnum.ReplaceAllString(s, "-")
 	return strings.Trim(s, "-")
+}
+
+// handleCopyPassword copies the stored password from the source
+// connection (query param `source`) into the target connection (URL
+// path `id`). Server-side only — the plaintext never enters a request
+// body or response body. Intended for "I set up one cluster with LDAP,
+// I want the same creds on the other four" flows.
+func (a *API) handleCopyPassword(w http.ResponseWriter, r *http.Request) {
+	targetID := r.PathValue("id")
+	sourceID := r.URL.Query().Get("source")
+	if targetID == "" || sourceID == "" {
+		jsonError(w, http.StatusBadRequest, "id + ?source= required")
+		return
+	}
+	if targetID == sourceID {
+		jsonError(w, http.StatusBadRequest, "source and target must differ")
+		return
+	}
+
+	source, okSrc, err := a.Store.GetConnection(sourceID)
+	if err != nil || !okSrc {
+		jsonError(w, http.StatusNotFound, "source connection not found")
+		return
+	}
+	if source.Password == "" {
+		jsonError(w, http.StatusBadRequest, "source has no stored password")
+		return
+	}
+
+	target, okTgt, err := a.Store.GetConnection(targetID)
+	if err != nil || !okTgt {
+		jsonError(w, http.StatusNotFound, "target connection not found")
+		return
+	}
+	target.Password = source.Password
+	if err := a.Store.UpsertConnection(target); err != nil {
+		jsonError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	if a.CustomerMgr != nil {
+		a.CustomerMgr.Invalidate(targetID)
+	}
+	after, _, _ := a.Store.GetConnection(targetID)
+	jsonOK(w, toPublic(after))
 }

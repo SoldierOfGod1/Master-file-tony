@@ -18,6 +18,38 @@ func RegisterClickUpRoutes(mux *http.ServeMux, api *API) {
 	mux.HandleFunc("GET /api/v1/clickup/tasks", api.handleClickUpListTasks)
 	mux.HandleFunc("POST /api/v1/clickup/tasks", api.handleClickUpCreateTask)
 	mux.HandleFunc("PATCH /api/v1/clickup/tasks/{id}", api.handleClickUpUpdateTask)
+	// Force-reapply the 10 rain statuses to the currently-configured
+	// list. Idempotent. Called by the "Sync Statuses" button or invoked
+	// automatically after a list_id change in settings.
+	mux.HandleFunc("POST /api/v1/clickup/ensure-statuses", api.handleClickUpEnsureStatuses)
+}
+
+// handleClickUpEnsureStatuses calls clickup.EnsureListStatuses on the
+// configured list. Idempotent — if the list already has the 10 rain
+// statuses in the right order it's a no-op and returns updated=false.
+func (a *API) handleClickUpEnsureStatuses(w http.ResponseWriter, r *http.Request) {
+	token, _, listID, ok := a.clickupCreds()
+	if !ok {
+		jsonError(w, http.StatusServiceUnavailable, "clickup not configured")
+		return
+	}
+	client := clickup.New(token)
+	ensureErr := client.EnsureListStatuses(listID, clickup.ProjectStatuses)
+	// Always fetch the live state so the caller can see what ClickUp
+	// actually has after the attempt — even if the PUT errored.
+	live, overrides, _ := client.ListStatuses(listID)
+	resp := map[string]any{
+		"list_id":           listID,
+		"wanted":            clickup.ProjectStatuses,
+		"live":              live,
+		"override_statuses": overrides,
+		"ok":                ensureErr == nil,
+	}
+	if ensureErr != nil {
+		resp["error"] = ensureErr.Error()
+		w.WriteHeader(http.StatusBadGateway)
+	}
+	jsonOK(w, resp)
 }
 
 // clickupCreds loads the most up-to-date token/workspace/list from the

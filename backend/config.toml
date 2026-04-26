@@ -3,8 +3,11 @@
 [server]
 host = "127.0.0.1"
 port = 8080
-read_timeout = "15s"
-write_timeout = "15s"
+read_timeout = "30s"
+# Long enough for the full ClickUp project sync (14 projects × ~3s each
+# due to ClickUp API rate limits = up to 60s). Anything longer should
+# use the async sync endpoint.
+write_timeout = "180s"
 
 [frontend]
 static_dir = "../frontend"
@@ -25,6 +28,16 @@ pong_timeout = "60s"
 [logging]
 level = "info"
 service_name = "command-centre"
+
+[athena]
+# AWS Athena — Customer 360 CDR usage panel. Read at startup via
+# ATHENA_* env vars. Leave ATHENA_OUTPUT empty to disable entirely.
+# AWS creds follow the default chain (env / ~/.aws / IAM role).
+#
+# ATHENA_REGION=eu-west-1                        # default; matches rain workgroup
+# ATHENA_DATABASE=usage                          # default
+# ATHENA_WORKGROUP=primary                       # optional
+# ATHENA_OUTPUT=s3://rain-athena-results/cc/     # REQUIRED — S3 URI for query results
 
 [clickup]
 # Personal API token from https://app.clickup.com/settings/apps — PASTE YOURS

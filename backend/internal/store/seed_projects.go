@@ -21,6 +21,8 @@ type seedProject struct {
 	Name        string
 	Description string
 	Components  []ProjectComponent
+	SITURL      string // deployment URL on the SIT vibe environment
+	ProdURL     string // production URL (unknown today for most)
 }
 
 const rainRoot = `C:\Users\BaptistaManuel\Downloads\Process Automation Specialist`
@@ -37,22 +39,26 @@ var defaultProjects = []seedProject{
 			{Role: "core", Path: rainRoot + `\RAPIDS`},
 			{Role: "backend", Path: rainRoot + `\rapids-backend-repo`},
 			{Role: "frontend", Path: rainRoot + `\rapids-frontend-repo`},
-		}},
+		},
+		SITURL: "https://rapids-sit.vibe.rain.co.za/"},
 
 	{ID: "proj-rollout-tracker", Name: "Rollout Tracker", Description: "Network rollout tracker",
-		Components: []ProjectComponent{{Role: "core", Path: rainRoot + `\ROLLOUT_TRACKER`}}},
+		Components: []ProjectComponent{{Role: "core", Path: rainRoot + `\ROLLOUT_TRACKER`}},
+		SITURL:     "https://rollouttracker-sit.vibe.rain.co.za/"},
 
 	{ID: "proj-rainlex", Name: "RainLex", Description: "RainLex app + deployment",
 		Components: []ProjectComponent{
 			{Role: "core", Path: rainRoot + `\rainLex`},
 			{Role: "infra", Path: rainRoot + `\rainlex-deploy`},
-		}},
+		},
+		SITURL: "https://rainlex-front-sit.vibe.rain.co.za/"},
 
 	{ID: "proj-learning-dev", Name: "Learning Dev", Description: "Internal learning/dev sandbox",
 		Components: []ProjectComponent{{Role: "core", Path: rainRoot + `\Learning_Dev`}}},
 
 	{ID: "proj-rainway-hr", Name: "Rainway HR AI Agent", Description: "HR automation AI agent",
-		Components: []ProjectComponent{{Role: "core", Path: rainRoot + `\rainway_HR_AI_Agent`}}},
+		Components: []ProjectComponent{{Role: "core", Path: rainRoot + `\rainway_HR_AI_Agent`}},
+		SITURL:     "https://raina-myhr-frontend-sit.vibe.rain.co.za/chat"},
 
 	{ID: "proj-bulk-risk-filter", Name: "Bulk Risk Filter", Description: "Bulk transaction risk screener",
 		Components: []ProjectComponent{{Role: "core", Path: rainRoot + `\Bulk Risk Filter`}}},
@@ -80,13 +86,26 @@ var defaultProjects = []seedProject{
 
 	{ID: "proj-pdf-reader", Name: "PDF Reader", Description: "PDF reader utility",
 		Components: []ProjectComponent{{Role: "core", Path: rainRoot + `\PDF reaader`}}},
+
+	{ID: "proj-sparcv2", Name: "Sparcv2", Description: "Sparc v2 forms — SIT-deployed",
+		Components: []ProjectComponent{{Role: "core", Path: rainRoot + `\sparcv2`}},
+		SITURL:     "https://sparcv2-form-sit.vibe.rain.co.za/sparc-v2-forms.html"},
 }
 
 // SeedProjectsIfEmpty inserts the default 13 projects if the projects table
 // has no rows. Safe to call on every boot — becomes a no-op once seeded.
 // Callers typically invoke this from main.go after SeedIfEmpty() for the
 // other tables.
+//
+// Also: on every boot it *does* backfill `sit_url`/`prod_url` on existing
+// rows where those columns are empty and a default is known — that way
+// shipping new default URLs (like the 5 SIT endpoints we just added)
+// doesn't require a database wipe. User-edited URLs are never overwritten.
 func (s *Store) SeedProjectsIfEmpty() error {
+	// Back-fill known SIT/Prod URLs on existing rows *without* touching
+	// anything the user edited. This runs every boot and is idempotent.
+	defer s.backfillEnvironmentURLs()
+
 	// "Real" = has a local_path. Legacy placeholder rows from the original
 	// seed (proj-1/2/3) have empty local_path and get replaced on first run.
 	var realCount int
@@ -135,11 +154,63 @@ func (s *Store) SeedProjectsIfEmpty() error {
 			INSERT INTO projects (
 				id, name, description, status, priority, owner,
 				local_path, components, has_frontend, has_backend,
-				progress_pct, created_at, updated_at
-			) VALUES (?, ?, ?, 'To Do', 'normal', 'baptista', ?, ?, ?, ?, 0, ?, ?)
-		`, p.ID, p.Name, p.Description, primaryPath, string(components), hasFrontend, hasBackend, now, now); err != nil {
+				progress_pct, sit_url, prod_url, created_at, updated_at
+			) VALUES (?, ?, ?, 'To Do', 'normal', 'baptista', ?, ?, ?, ?, 0, ?, ?, ?, ?)
+		`,
+			p.ID, p.Name, p.Description, primaryPath, string(components),
+			hasFrontend, hasBackend, p.SITURL, p.ProdURL, now, now,
+		); err != nil {
 			return fmt.Errorf("insert project %s: %w", p.ID, err)
 		}
 	}
 	return nil
+}
+
+// backfillEnvironmentURLs updates sit_url/prod_url on projects that
+// already exist in the DB (so upgrades pick up newly-known defaults)
+// without clobbering user-edited values. "Empty" = NULL or ''.
+func (s *Store) backfillEnvironmentURLs() {
+	for _, p := range defaultProjects {
+		if p.SITURL == "" && p.ProdURL == "" {
+			continue
+		}
+		if p.SITURL != "" {
+			_, _ = s.DB.Exec(
+				`UPDATE projects SET sit_url = ?
+				  WHERE id = ? AND (sit_url IS NULL OR sit_url = '')`,
+				p.SITURL, p.ID)
+		}
+		if p.ProdURL != "" {
+			_, _ = s.DB.Exec(
+				`UPDATE projects SET prod_url = ?
+				  WHERE id = ? AND (prod_url IS NULL OR prod_url = '')`,
+				p.ProdURL, p.ID)
+		}
+	}
+	// Also ensure the new Sparcv2 project row exists, even on a
+	// pre-existing DB that was seeded before it was added to the list.
+	for _, p := range defaultProjects {
+		if p.ID != "proj-sparcv2" {
+			continue
+		}
+		var exists int
+		_ = s.DB.QueryRow(`SELECT COUNT(*) FROM projects WHERE id = ?`, p.ID).Scan(&exists)
+		if exists > 0 {
+			continue
+		}
+		components, _ := json.Marshal(p.Components)
+		primaryPath := ""
+		if len(p.Components) > 0 {
+			primaryPath = p.Components[0].Path
+		}
+		now := time.Now().UTC().Format(time.RFC3339)
+		_, _ = s.DB.Exec(`
+			INSERT INTO projects (
+				id, name, description, status, priority, owner,
+				local_path, components, has_frontend, has_backend,
+				progress_pct, sit_url, prod_url, created_at, updated_at
+			) VALUES (?, ?, ?, 'To Do', 'normal', 'baptista', ?, ?, 0, 0, 0, ?, ?, ?, ?)
+		`, p.ID, p.Name, p.Description, primaryPath, string(components),
+			p.SITURL, p.ProdURL, now, now)
+	}
 }

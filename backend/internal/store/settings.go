@@ -67,4 +67,16 @@ const (
 	SettingAxiomUser     = "axiom.user"
 	SettingAxiomPassword = "axiom.password"
 	SettingAxiomSSLMode  = "axiom.ssl_mode"
+
+	// AWS Athena settings for the Customer 360 CDR usage panel.
+	// Stored in app_settings so the user can flip region / S3 output
+	// without a restart and without touching env vars.
+	SettingAthenaEnabled         = "athena.enabled"           // "true" | "false"
+	SettingAthenaRegion          = "athena.region"            // e.g. eu-west-1
+	SettingAthenaDatabase        = "athena.database"          // usage
+	SettingAthenaWorkgroup       = "athena.workgroup"         // optional, e.g. primary
+	SettingAthenaOutputS3        = "athena.output_s3"         // REQUIRED: s3://bucket/prefix/
+	SettingAthenaAccessKeyID     = "athena.aws_access_key_id"     // optional; AWS chain fallback
+	SettingAthenaSecretAccessKey = "athena.aws_secret_access_key" // optional
+	SettingAthenaSessionToken    = "athena.aws_session_token"    // required when using ASIA temporary creds
 )

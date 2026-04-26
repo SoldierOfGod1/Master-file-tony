@@ -31,6 +31,16 @@ var allowedSettings = map[string]bool{
 	store.SettingAxiomUser:     true,
 	store.SettingAxiomPassword: true,
 	store.SettingAxiomSSLMode:  true,
+
+	// Customer 360 CDR usage via AWS Athena
+	store.SettingAthenaEnabled:         true,
+	store.SettingAthenaRegion:          true,
+	store.SettingAthenaDatabase:        true,
+	store.SettingAthenaWorkgroup:       true,
+	store.SettingAthenaOutputS3:        true,
+	store.SettingAthenaAccessKeyID:     true,
+	store.SettingAthenaSecretAccessKey: true,
+	store.SettingAthenaSessionToken:    true,
 }
 
 // handleGetSettings returns every whitelisted setting. Secret-like values
@@ -61,6 +71,11 @@ func (a *API) handleGetSettings(w http.ResponseWriter, r *http.Request) {
 		all[store.SettingAxiomUser] != "" &&
 		all[store.SettingAxiomPassword] != "" &&
 		all[store.SettingAxiomDatabase] != ""
+	// Athena only needs a region + S3 output to be "configured" in
+	// the UI sense. AWS creds can come from env / IAM role — the
+	// backend layers both on startup.
+	out["athena.configured"] = all[store.SettingAthenaRegion] != "" &&
+		all[store.SettingAthenaOutputS3] != ""
 	jsonOK(w, out)
 }
 
@@ -68,7 +83,10 @@ func (a *API) handleGetSettings(w http.ResponseWriter, r *http.Request) {
 // read (tokens, passwords). Keep this in sync with any new secret keys
 // added to allowedSettings.
 func isSecretKey(key string) bool {
-	return key == store.SettingClickUpToken || key == store.SettingAxiomPassword
+	return key == store.SettingClickUpToken ||
+		key == store.SettingAxiomPassword ||
+		key == store.SettingAthenaSecretAccessKey ||
+		key == store.SettingAthenaSessionToken
 }
 
 // handleUpdateSettings accepts a partial JSON object of setting updates.

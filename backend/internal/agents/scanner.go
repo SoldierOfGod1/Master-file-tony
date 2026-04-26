@@ -206,6 +206,117 @@ func pluginNameFromPath(agentsDir, pluginsRoot string) string {
 	return parts[0]
 }
 
+// CreateAgentRequest is the input to Scanner.CreateAgent. Body can be
+// empty — we'll synthesise a minimal frontmatter-only file in that
+// case so the file is immediately valid.
+type CreateAgentRequest struct {
+	Name        string
+	Description string
+	Category    string
+	Dest        Source // SourceGlobal or SourceProject
+	Body        string // raw markdown (may be empty); frontmatter is always built for the caller
+	Model       string
+	Overwrite   bool
+}
+
+// CreateAgent writes a new agent .md under the user-owned root for the
+// requested destination (global → ~/.claude/agents, project →
+// <project>/.claude/agents). Slugifies the name; refuses duplicates
+// unless Overwrite is true. Returns the absolute path.
+func (s *Scanner) CreateAgent(req CreateAgentRequest) (string, error) {
+	name := strings.TrimSpace(req.Name)
+	desc := strings.TrimSpace(req.Description)
+	if name == "" || desc == "" {
+		return "", fmt.Errorf("name and description are required")
+	}
+	slug := slugifyAgentName(name)
+	if slug == "" {
+		return "", fmt.Errorf("name yielded empty slug")
+	}
+
+	var root string
+	switch req.Dest {
+	case SourceProject:
+		root = filepath.Join(s.projectDir, ".claude", "agents")
+	default:
+		root = filepath.Join(s.homeDir, ".claude", "agents")
+	}
+	if err := os.MkdirAll(root, 0o755); err != nil {
+		return "", fmt.Errorf("mkdir %s: %w", root, err)
+	}
+	target := filepath.Join(root, slug+".md")
+	if _, err := os.Stat(target); err == nil && !req.Overwrite {
+		return "", fmt.Errorf("agent %s already exists — pick a different name", slug)
+	}
+
+	var b strings.Builder
+	b.WriteString("---\n")
+	b.WriteString("name: " + slug + "\n")
+	b.WriteString("description: " + escapeYAMLInline(desc) + "\n")
+	if req.Category != "" {
+		b.WriteString("category: " + escapeYAMLInline(req.Category) + "\n")
+	}
+	if req.Model != "" {
+		b.WriteString("model: " + escapeYAMLInline(req.Model) + "\n")
+	}
+	b.WriteString("---\n\n")
+	if req.Body != "" {
+		b.WriteString(req.Body)
+		if !strings.HasSuffix(req.Body, "\n") {
+			b.WriteString("\n")
+		}
+	} else {
+		b.WriteString("# " + name + "\n\n" + desc + "\n")
+	}
+
+	// Reuse the sandboxed atomic write helper from hooks_rules.go.
+	if err := s.WriteFile(target, []byte(b.String())); err != nil {
+		return "", err
+	}
+	return target, nil
+}
+
+// slugifyAgentName produces a filesystem-safe slug (lowercase, hyphens).
+func slugifyAgentName(s string) string {
+	s = strings.ToLower(strings.TrimSpace(s))
+	var out strings.Builder
+	prevHyphen := true
+	for _, r := range s {
+		switch {
+		case r >= 'a' && r <= 'z', r >= '0' && r <= '9':
+			out.WriteRune(r)
+			prevHyphen = false
+		case r == '-' || r == '_' || r == ' ':
+			if !prevHyphen {
+				out.WriteRune('-')
+				prevHyphen = true
+			}
+		}
+	}
+	return strings.Trim(out.String(), "-")
+}
+
+// escapeYAMLInline is a conservative YAML single-line escape — wraps in
+// double quotes if the string contains `:`, `"`, `'`, `#`, or starts
+// with a character YAML treats specially.
+func escapeYAMLInline(s string) string {
+	s = strings.TrimSpace(s)
+	if s == "" {
+		return `""`
+	}
+	needsQuote := false
+	if strings.ContainsAny(s, ":\"'#&*!|>%@`") {
+		needsQuote = true
+	}
+	if strings.HasPrefix(s, "- ") || strings.HasPrefix(s, "? ") {
+		needsQuote = true
+	}
+	if !needsQuote {
+		return s
+	}
+	return `"` + strings.ReplaceAll(s, `"`, `\"`) + `"`
+}
+
 // ReadMemory returns the contents of the agent's companion memory file, or
 // "" when no file exists. Path disambiguates which agent (global vs project).
 func (s *Scanner) ReadMemory(path string) (string, error) {
