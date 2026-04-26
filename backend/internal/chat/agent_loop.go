@@ -81,7 +81,7 @@ func NewAgentClient(cfg AgentConfig) *AgentClient {
 // the event bus so the UI can show "looking up customer / checking
 // payments / ..." progress instead of staring at an empty screen.
 type AgentTurn struct {
-	Kind        string         `json:"kind"`        // "thinking" | "tool_call" | "tool_result" | "final"
+	Kind        string         `json:"kind"`        // "thinking" | "tool_call" | "tool_result" | "final" | "write_blocked"
 	ToolName    string         `json:"tool_name,omitempty"`
 	ToolInput   any            `json:"tool_input,omitempty"`
 	ToolResult  any            `json:"tool_result,omitempty"`
@@ -90,19 +90,29 @@ type AgentTurn struct {
 	At          time.Time      `json:"at"`
 }
 
-// Run executes the loop. emit is called once per significant step
-// so the caller can stream into the event bus / WebSocket. Returns
-// the final answer text plus the full turn history for audit.
-func (a *AgentClient) Run(ctx context.Context, systemPrompt, userPrompt string, emit func(AgentTurn)) (string, []AgentTurn, error) {
+// AgentRunOptions carries everything Run needs, including Phase B1
+// identity and Phase B2 approval-gate config.
+type AgentRunOptions struct {
+	SystemPrompt string
+	UserPrompt   string
+	UserID       string // empty = anonymous; write tools refused
+	Emit         func(AgentTurn)
+}
+
+// Run executes the loop. opts.Emit is called once per significant
+// step so the caller can stream into the event bus / WebSocket.
+// Returns the final answer text plus the full turn history for audit.
+func (a *AgentClient) Run(ctx context.Context, opts AgentRunOptions) (string, []AgentTurn, error) {
 	if a.apiKey == "" {
 		return "", nil, fmt.Errorf("agent client has no API key")
 	}
+	emit := opts.Emit
 	if emit == nil {
 		emit = func(AgentTurn) {}
 	}
 
 	messages := []anthropicMessage{
-		{Role: "user", Content: []anthropicBlock{{Type: "text", Text: userPrompt}}},
+		{Role: "user", Content: []anthropicBlock{{Type: "text", Text: opts.UserPrompt}}},
 	}
 	turns := []AgentTurn{}
 
@@ -110,7 +120,7 @@ func (a *AgentClient) Run(ctx context.Context, systemPrompt, userPrompt string, 
 		req := anthropicRequest{
 			Model:        a.model,
 			MaxTokens:    4096,
-			System:       systemPrompt,
+			System:       opts.SystemPrompt,
 			Messages:     messages,
 			Tools:        nil,
 		}
@@ -175,7 +185,57 @@ func (a *AgentClient) Run(ctx context.Context, systemPrompt, userPrompt string, 
 				continue
 			}
 
+			// Phase B2 gate: refuse Write tools unless they're the
+			// approval_create tool itself. The model has to register
+			// the proposed action with approval_create first; a human
+			// reviews + executes via /approvals. The dispatcher uses
+			// approval_create as the universal gate so any future
+			// Write tool inherits the same protection without code
+			// changes here. Phase B1 also refuses on anonymous user.
+			if tool.Write && tu.Name != "approval_create" {
+				blocked := fmt.Sprintf(
+					"action %q requires human approval. Call approval_create with "+
+						"a clear title + summary describing what you want to do (and "+
+						"the args you would have used). A human will review at "+
+						"/approvals; once approved they will run the action.",
+					tu.Name,
+				)
+				blockTurn := AgentTurn{Kind: "write_blocked", ToolName: tu.Name, ToolInput: tu.Input, Error: blocked, At: time.Now()}
+				turns = append(turns, blockTurn)
+				emit(blockTurn)
+				toolResults = append(toolResults, anthropicBlock{
+					Type:      "tool_result",
+					ToolUseID: tu.ID,
+					IsError:   true,
+					Content:   blocked,
+				})
+				continue
+			}
+			if tool.Write && opts.UserID == "" {
+				blocked := fmt.Sprintf(
+					"approval_create rejected: anonymous user. The chat session "+
+						"has no associated user_id; mutating actions are not "+
+						"permitted from anonymous sessions.",
+				)
+				blockTurn := AgentTurn{Kind: "write_blocked", ToolName: tu.Name, ToolInput: tu.Input, Error: blocked, At: time.Now()}
+				turns = append(turns, blockTurn)
+				emit(blockTurn)
+				toolResults = append(toolResults, anthropicBlock{
+					Type:      "tool_result",
+					ToolUseID: tu.ID,
+					IsError:   true,
+					Content:   blocked,
+				})
+				continue
+			}
+
 			rawInput, _ := json.Marshal(tu.Input)
+			// Inject the user_id as the approval requester for Phase B2
+			// so the audit trail is honest. approval_create is the only
+			// Write tool that gets here.
+			if tool.Write && opts.UserID != "" {
+				rawInput = injectRequester(rawInput, opts.UserID)
+			}
 			out, err := tool.Run(ctx, rawInput)
 			if err != nil {
 				errStr := err.Error()
@@ -265,6 +325,28 @@ type anthropicResponse struct {
 type anthropicUsage struct {
 	InputTokens  int `json:"input_tokens"`
 	OutputTokens int `json:"output_tokens"`
+}
+
+// injectRequester adds a "requester" field to the JSON tool input
+// when not already present. Used for approval_create so the audit
+// trail attributes the request to the right user_id.
+func injectRequester(raw []byte, userID string) []byte {
+	if len(raw) == 0 {
+		merged, _ := json.Marshal(map[string]any{"requester": userID})
+		return merged
+	}
+	var args map[string]any
+	if err := json.Unmarshal(raw, &args); err != nil {
+		return raw // model gave us something weird; let the catalogue handle it
+	}
+	if args == nil {
+		args = map[string]any{}
+	}
+	if _, has := args["requester"]; !has {
+		args["requester"] = userID
+	}
+	merged, _ := json.Marshal(args)
+	return merged
 }
 
 func (a *AgentClient) callMessages(ctx context.Context, req anthropicRequest) (*anthropicResponse, error) {

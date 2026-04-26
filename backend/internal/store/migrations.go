@@ -182,9 +182,15 @@ var migrations = []string{
 		project_dir TEXT NOT NULL,
 		source TEXT NOT NULL DEFAULT 'ui',
 		status TEXT NOT NULL DEFAULT 'active',
+		user_id TEXT NOT NULL DEFAULT '',
 		created_at TEXT NOT NULL DEFAULT (datetime('now')),
 		updated_at TEXT NOT NULL DEFAULT (datetime('now'))
 	)`,
+	// Phase B1 of the agent-orchestrator plan: per-conversation
+	// user_id. Existing rows get '' which the dispatcher treats
+	// as 'anonymous' (write tools refused). Every new conversation
+	// from the UI / Discord populates this from the request.
+	`ALTER TABLE conversations ADD COLUMN user_id TEXT NOT NULL DEFAULT ''`,
 
 	`CREATE TABLE IF NOT EXISTS messages (
 		id INTEGER PRIMARY KEY AUTOINCREMENT,

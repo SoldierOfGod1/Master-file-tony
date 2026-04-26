@@ -210,7 +210,7 @@ func (c *ToolCatalogue) register() {
 		},
 		{
 			Name:        "approval_create",
-			Description: "WRITE. Create an Approval row for a destructive or high-impact action. The agent uses this to gate any write tool that's not in the auto-allow list.",
+			Description: "WRITE. Create an Approval row for a destructive or high-impact action. The agent uses this to gate any write tool that's not in the auto-allow list. The agent loop injects the requester (current user_id) automatically; do not set it yourself.",
 			InputSchema: map[string]any{
 				"type": "object",
 				"properties": map[string]any{
@@ -221,7 +221,10 @@ func (c *ToolCatalogue) register() {
 				"required": []string{"title"},
 			},
 			Write: true,
-			Run:   c.runPostJSON("approvals", []string{"title", "summary", "context"}),
+			// requester is injected by the agent loop's Phase B1
+			// hook (see injectRequester in agent_loop.go); listed
+			// here so runPostJSON forwards it through.
+			Run: c.runPostJSON("approvals", []string{"title", "summary", "context", "requester"}),
 		},
 	}
 }

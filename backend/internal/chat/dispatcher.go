@@ -138,6 +138,11 @@ func (d *Dispatcher) Dispatch(ctx context.Context, req ExecuteRequest) (string, 
 	}
 
 	systemPrompt := buildAgentSystemPrompt(classification)
+	if req.UserID != "" {
+		systemPrompt += fmt.Sprintf(" The current user is %q.", req.UserID)
+	} else {
+		systemPrompt += " The current user is anonymous; refuse any action that mutates state."
+	}
 	emit := func(t AgentTurn) {
 		// Stream every turn to the bus in the same shape the
 		// existing chat.stream consumer expects, plus a metadata
@@ -154,7 +159,12 @@ func (d *Dispatcher) Dispatch(ctx context.Context, req ExecuteRequest) (string, 
 		d.bus.PublishJSON("chat.stream", evt)
 	}
 
-	finalText, _, err := d.agent.Run(ctx, systemPrompt, req.Prompt, emit)
+	finalText, _, err := d.agent.Run(ctx, AgentRunOptions{
+		SystemPrompt: systemPrompt,
+		UserPrompt:   req.Prompt,
+		UserID:       req.UserID,
+		Emit:         emit,
+	})
 	if err != nil {
 		// Agent path failed — fall back to CLI rather than 500ing
 		// the user. Log the failure so we can tune.

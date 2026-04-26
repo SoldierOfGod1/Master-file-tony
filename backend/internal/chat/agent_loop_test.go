@@ -44,7 +44,7 @@ func TestAgentClient_TextOnly_ReturnsImmediately(t *testing.T) {
 	defer srv.Close()
 
 	a := NewAgentClient(AgentConfig{APIKey: "test", Model: "haiku", BaseURL: srv.URL})
-	got, turns, err := a.Run(context.Background(), "system", "is axiom up?", nil)
+	got, turns, err := a.Run(context.Background(), AgentRunOptions{SystemPrompt: "system", UserPrompt: "is axiom up?", UserID: "tester"})
 	if err != nil {
 		t.Fatalf("run: %v", err)
 	}
@@ -85,9 +85,7 @@ func TestAgentClient_OneToolThenText(t *testing.T) {
 	a := NewAgentClient(AgentConfig{APIKey: "test", Model: "h", BaseURL: srv.URL, Catalogue: cat})
 
 	var streamed []AgentTurn
-	got, turns, err := a.Run(context.Background(), "sys", "is axiom up?", func(t AgentTurn) {
-		streamed = append(streamed, t)
-	})
+	got, turns, err := a.Run(context.Background(), AgentRunOptions{SystemPrompt: "sys", UserPrompt: "is axiom up?", UserID: "tester", Emit: func(t AgentTurn) { streamed = append(streamed, t) }})
 	if err != nil {
 		t.Fatalf("run: %v", err)
 	}
@@ -129,7 +127,7 @@ func TestAgentClient_UnknownToolGracefulError(t *testing.T) {
 	defer srv.Close()
 	cat := NewToolCatalogue("http://localhost")
 	a := NewAgentClient(AgentConfig{APIKey: "test", BaseURL: srv.URL, Catalogue: cat})
-	got, turns, err := a.Run(context.Background(), "", "do something unsupported", nil)
+	got, turns, err := a.Run(context.Background(), AgentRunOptions{UserPrompt: "do something unsupported", UserID: "tester"})
 	if err != nil {
 		t.Fatalf("run: %v", err)
 	}
@@ -160,7 +158,7 @@ func TestAgentClient_MaxTurnsCap(t *testing.T) {
 
 	a := NewAgentClient(AgentConfig{APIKey: "x", BaseURL: srv.URL, Catalogue: NewToolCatalogue(healthSrv.URL + "/api/v1")})
 	a.MaxTurns = 3
-	_, turns, err := a.Run(context.Background(), "", "loop forever", nil)
+	_, turns, err := a.Run(context.Background(), AgentRunOptions{UserPrompt: "loop forever", UserID: "tester"})
 	if err == nil {
 		t.Error("expected max-turns error")
 	}
@@ -175,9 +173,150 @@ func TestAgentClient_MaxTurnsCap(t *testing.T) {
 
 func TestAgentClient_NoAPIKeyFailsFast(t *testing.T) {
 	a := NewAgentClient(AgentConfig{})
-	_, _, err := a.Run(context.Background(), "", "anything", nil)
+	_, _, err := a.Run(context.Background(), AgentRunOptions{UserPrompt: "anything", UserID: "tester"})
 	if err == nil {
 		t.Error("expected error when API key missing")
+	}
+}
+
+func TestAgentClient_WriteToolBlockedByApprovalGate(t *testing.T) {
+	// First Anthropic response: model tries to call imsi_override_set
+	// (Write=true, not approval_create). Dispatcher must intercept
+	// and inject a write_blocked tool_result without invoking the
+	// catalogue at all.
+	fake := &fakeAnthropic{responses: []string{
+		`{"id":"x","model":"h","stop_reason":"tool_use","content":[
+			{"type":"tool_use","id":"tu_1","name":"imsi_override_set","input":{"customer_id":"abc","imsis":["655..."]}}
+		]}`,
+		`{"id":"y","model":"h","stop_reason":"end_turn","content":[
+			{"type":"text","text":"I'll create an approval first."}
+		]}`,
+	}}
+	srv := httptest.NewServer(fake.handler())
+	defer srv.Close()
+
+	// Backend would never be hit if the gate works — fail-fast if it is.
+	backendCalls := 0
+	backend := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		backendCalls++
+		http.Error(w, "GATE BYPASSED — should never be called", 500)
+	}))
+	defer backend.Close()
+
+	cat := NewToolCatalogue(backend.URL + "/api/v1")
+	a := NewAgentClient(AgentConfig{APIKey: "test", BaseURL: srv.URL, Catalogue: cat})
+	_, turns, err := a.Run(context.Background(), AgentRunOptions{UserPrompt: "override", UserID: "tester"})
+	if err != nil {
+		t.Fatalf("run: %v", err)
+	}
+	if backendCalls != 0 {
+		t.Errorf("imsi_override_set should never have hit the backend, got %d calls", backendCalls)
+	}
+	// Turns: write_blocked + final.
+	var sawBlocked bool
+	for _, tr := range turns {
+		if tr.Kind == "write_blocked" && tr.ToolName == "imsi_override_set" {
+			sawBlocked = true
+			if tr.Error == "" {
+				t.Error("write_blocked turn should carry an error message")
+			}
+		}
+	}
+	if !sawBlocked {
+		t.Errorf("expected write_blocked turn, got %+v", turns)
+	}
+}
+
+func TestAgentClient_AnonymousUserBlockedFromWriteTools(t *testing.T) {
+	// approval_create itself is Write but is the canonical gate.
+	// Anonymous user (UserID="") must still be refused.
+	fake := &fakeAnthropic{responses: []string{
+		`{"id":"x","model":"h","stop_reason":"tool_use","content":[
+			{"type":"tool_use","id":"tu_1","name":"approval_create","input":{"title":"do thing"}}
+		]}`,
+		`{"id":"y","model":"h","stop_reason":"end_turn","content":[
+			{"type":"text","text":"I cannot create approvals anonymously."}
+		]}`,
+	}}
+	srv := httptest.NewServer(fake.handler())
+	defer srv.Close()
+
+	backendCalls := 0
+	backend := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		backendCalls++
+	}))
+	defer backend.Close()
+
+	a := NewAgentClient(AgentConfig{APIKey: "test", BaseURL: srv.URL, Catalogue: NewToolCatalogue(backend.URL + "/api/v1")})
+	_, turns, err := a.Run(context.Background(), AgentRunOptions{UserPrompt: "x", UserID: ""})
+	if err != nil {
+		t.Fatalf("run: %v", err)
+	}
+	if backendCalls != 0 {
+		t.Errorf("anonymous approval_create must not hit backend, got %d calls", backendCalls)
+	}
+	var sawBlocked bool
+	for _, tr := range turns {
+		if tr.Kind == "write_blocked" {
+			sawBlocked = true
+		}
+	}
+	if !sawBlocked {
+		t.Errorf("expected anonymous block, got %+v", turns)
+	}
+}
+
+func TestAgentClient_ApprovalCreateInjectsRequester(t *testing.T) {
+	// approval_create is the only Write tool that should reach the
+	// backend. The agent loop must inject the user_id as
+	// "requester" if the model didn't supply one.
+	fake := &fakeAnthropic{responses: []string{
+		`{"id":"x","model":"h","stop_reason":"tool_use","content":[
+			{"type":"tool_use","id":"tu_1","name":"approval_create","input":{"title":"override IMSI for X","summary":"customer Y reports stale IMSI"}}
+		]}`,
+		`{"id":"y","model":"h","stop_reason":"end_turn","content":[
+			{"type":"text","text":"approval created."}
+		]}`,
+	}}
+	srv := httptest.NewServer(fake.handler())
+	defer srv.Close()
+
+	var receivedRequester string
+	backend := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var body map[string]any
+		_ = json.NewDecoder(r.Body).Decode(&body)
+		if r, ok := body["requester"].(string); ok {
+			receivedRequester = r
+		}
+		_, _ = w.Write([]byte(`{"id":"appr_1","status":"pending"}`))
+	}))
+	defer backend.Close()
+
+	a := NewAgentClient(AgentConfig{APIKey: "test", BaseURL: srv.URL, Catalogue: NewToolCatalogue(backend.URL + "/api/v1")})
+	_, _, err := a.Run(context.Background(), AgentRunOptions{UserPrompt: "approve thing", UserID: "baptista"})
+	if err != nil {
+		t.Fatalf("run: %v", err)
+	}
+	if receivedRequester != "baptista" {
+		t.Errorf("expected requester=baptista, got %q", receivedRequester)
+	}
+}
+
+func TestInjectRequester(t *testing.T) {
+	// Empty raw -> add requester.
+	got := injectRequester(nil, "alice")
+	if !strings.Contains(string(got), `"requester":"alice"`) {
+		t.Errorf("nil raw: %s", got)
+	}
+	// Existing args -> add requester field.
+	got = injectRequester([]byte(`{"title":"x"}`), "alice")
+	if !strings.Contains(string(got), `"requester":"alice"`) {
+		t.Errorf("merge: %s", got)
+	}
+	// Existing requester wins (model already set it).
+	got = injectRequester([]byte(`{"title":"x","requester":"existing"}`), "alice")
+	if strings.Contains(string(got), `"requester":"alice"`) {
+		t.Errorf("must not overwrite caller-supplied requester: %s", got)
 	}
 }
 
@@ -188,7 +327,7 @@ func TestAgentClient_PropagatesAPIError(t *testing.T) {
 	}))
 	defer srv.Close()
 	a := NewAgentClient(AgentConfig{APIKey: "bad", BaseURL: srv.URL})
-	_, _, err := a.Run(context.Background(), "", "x", nil)
+	_, _, err := a.Run(context.Background(), AgentRunOptions{UserPrompt: "x", UserID: "tester"})
 	if err == nil {
 		t.Fatal("expected error from API 401")
 	}

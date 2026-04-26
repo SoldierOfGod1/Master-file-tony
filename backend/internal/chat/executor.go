@@ -43,6 +43,15 @@ type ExecuteRequest struct {
 	ProjectDir     string
 	HasPIN         bool      // if true, full tool access; if false, read-only
 	Agent          AgentSlug // optional persona; empty = orchestrator default
+
+	// UserID identifies the requesting user. Phase B1 of the
+	// agent-orchestrator plan. Sources:
+	//   - web UI: cookie/header (or 'anonymous' for now)
+	//   - Discord bot: discord user_id
+	//   - empty string = anonymous; the dispatcher's Write-tool
+	//     gate refuses write operations from anonymous requests
+	//     so safety doesn't depend on B1 fully landing first.
+	UserID string
 }
 
 // StreamEvent is published on the event bus while the CLI is running.

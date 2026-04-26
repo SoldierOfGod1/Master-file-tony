@@ -64,6 +64,12 @@ func (a *API) handleClassifyIntent(w http.ResponseWriter, r *http.Request) {
 // API tool-use loop or CLI subprocess, both stream into the same
 // event bus. Returns the final answer text. Falls back to 503 if
 // the dispatcher isn't wired (env not configured).
+//
+// Phase B1 user_id resolution order:
+//   1. Request body 'userId' field (caller-supplied — Discord bot,
+//      authenticated frontend, etc.).
+//   2. conversations.user_id column for this conversation.
+//   3. empty string ('anonymous') — write tools refused per Phase B2.
 func (a *API) handleChatAgent(w http.ResponseWriter, r *http.Request) {
 	if a.Dispatcher == nil {
 		jsonError(w, 503, "agent dispatcher not configured (set ANTHROPIC_API_KEY to enable)")
@@ -74,6 +80,7 @@ func (a *API) handleChatAgent(w http.ResponseWriter, r *http.Request) {
 		Message        string `json:"message"`
 		PIN            string `json:"pin"`
 		ProjectDir     string `json:"projectDir"`
+		UserID         string `json:"userId"`
 	}
 	if err := readJSON(r, &body); err != nil {
 		jsonError(w, 400, "invalid json")
@@ -90,17 +97,28 @@ func (a *API) handleChatAgent(w http.ResponseWriter, r *http.Request) {
 			hasPIN = chat.VerifyPIN(body.PIN, pinHash)
 		}
 	}
+	// If the caller didn't supply a user_id, fall back to whatever
+	// the conversation row carries. Discord-sourced conversations
+	// will already have one populated; web sessions default to
+	// empty (anonymous) until B1 ships a real auth layer.
+	userID := strings.TrimSpace(body.UserID)
+	if userID == "" {
+		var convUserID string
+		_ = a.DB.QueryRow("SELECT user_id FROM conversations WHERE id = ?", body.ConversationID).Scan(&convUserID)
+		userID = convUserID
+	}
 	resp, err := a.Dispatcher.Dispatch(r.Context(), chat.ExecuteRequest{
 		ConversationID: body.ConversationID,
 		Prompt:         body.Message,
 		ProjectDir:     body.ProjectDir,
 		HasPIN:         hasPIN,
+		UserID:         userID,
 	})
 	if err != nil {
 		jsonError(w, 500, fmt.Sprintf("agent dispatch failed: %v", err))
 		return
 	}
-	jsonOK(w, map[string]any{"response": resp})
+	jsonOK(w, map[string]any{"response": resp, "user_id": userID})
 }
 
 // ── Conversations ────────────────────────────────────────
