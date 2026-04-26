@@ -1,6 +1,7 @@
 package server
 
 import (
+	"database/sql"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -110,6 +111,7 @@ func (a *API) handleChatAgent(w http.ResponseWriter, r *http.Request) {
 		PIN            string `json:"pin"`
 		ProjectDir     string `json:"projectDir"`
 		UserID         string `json:"userId"`
+		IncidentID     string `json:"incidentId"`
 	}
 	if err := readJSON(r, &body); err != nil {
 		jsonError(w, 400, "invalid json")
@@ -136,6 +138,16 @@ func (a *API) handleChatAgent(w http.ResponseWriter, r *http.Request) {
 		_ = a.DB.QueryRow("SELECT user_id FROM conversations WHERE id = ?", body.ConversationID).Scan(&convUserID)
 		userID = convUserID
 	}
+	// Phase D2 — same fallback shape for incident_id: explicit
+	// > conversation row > none. Lets the operator pin a
+	// conversation to an incident once and have every subsequent
+	// chat run inherit it without re-passing.
+	incidentID := strings.TrimSpace(body.IncidentID)
+	if incidentID == "" {
+		var convIncidentID sql.NullString
+		_ = a.DB.QueryRow("SELECT incident_id FROM conversations WHERE id = ?", body.ConversationID).Scan(&convIncidentID)
+		incidentID = convIncidentID.String
+	}
 	// Phase C1 — mark the conversation as in-flight so the
 	// frontend's reconnect probe can detect "still streaming".
 	if a.ActiveConvs != nil {
@@ -148,12 +160,13 @@ func (a *API) handleChatAgent(w http.ResponseWriter, r *http.Request) {
 		ProjectDir:     body.ProjectDir,
 		HasPIN:         hasPIN,
 		UserID:         userID,
+		IncidentID:     incidentID,
 	})
 	if err != nil {
 		jsonError(w, 500, fmt.Sprintf("agent dispatch failed: %v", err))
 		return
 	}
-	jsonOK(w, map[string]any{"response": resp, "user_id": userID})
+	jsonOK(w, map[string]any{"response": resp, "user_id": userID, "incident_id": incidentID})
 }
 
 // ── Conversations ────────────────────────────────────────

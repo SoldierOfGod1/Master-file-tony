@@ -52,6 +52,14 @@ type ExecuteRequest struct {
 	//     gate refuses write operations from anonymous requests
 	//     so safety doesn't depend on B1 fully landing first.
 	UserID string
+
+	// IncidentID optionally ties this run to an active incident.
+	// Phase D2 of the agent-orchestrator plan: when set, the
+	// system prompt mentions the incident, cost_records is
+	// tagged for spend attribution, and any approvals/audit rows
+	// the agent creates inherit the same id. Empty = no
+	// incident in scope (the normal case).
+	IncidentID string
 }
 
 // StreamEvent is published on the event bus while the CLI is running.

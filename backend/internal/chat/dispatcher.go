@@ -189,6 +189,16 @@ func (d *Dispatcher) Dispatch(ctx context.Context, req ExecuteRequest) (string, 
 		systemPrompt += FormatForPrompt(mem)
 		systemPrompt += "\nIf you learn something memorable about the user (a preference, an incident finding, a recurring pattern), call the `remember` tool to persist it. Be selective — only memorable things, not chit-chat."
 	}
+	// Phase D2 — surface the active incident_id so every tool
+	// call the agent makes can quote it in its summary, every
+	// approval it raises ties back, and the spend on this run is
+	// attributable to the incident.
+	if req.IncidentID != "" {
+		systemPrompt += fmt.Sprintf(
+			"\n\nActive incident: %q. Mention this id when you summarise findings or create approvals so we can correlate everything you do during this session with the incident timeline.",
+			req.IncidentID,
+		)
+	}
 	// Phase B3 — surface budget warning to the model so it can
 	// be more economical on tool-use depth when the user is near
 	// the cap. Doesn't change behaviour, just adds a hint.

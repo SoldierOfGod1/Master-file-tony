@@ -29,6 +29,7 @@ type UsageRecord struct {
 	OutputTokens   int
 	AmountZAR      float64
 	UserID         string // Phase B3 — per-user budget attribution
+	IncidentID     string // Phase D2 — spend attribution to the active incident
 }
 
 // Regex variants — different Claude CLI versions print usage slightly
@@ -117,10 +118,10 @@ func RecordUsage(db *sql.DB, log *slog.Logger, rec UsageRecord) {
 	_, err := db.Exec(
 		`INSERT INTO cost_records
 			(date, model_name, amount_zar, tokens_used,
-			 conversation_id, input_tokens, output_tokens, user_id)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+			 conversation_id, input_tokens, output_tokens, user_id, incident_id)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		today, modelName, rec.AmountZAR, totalTokens,
-		rec.ConversationID, rec.InputTokens, rec.OutputTokens, rec.UserID,
+		rec.ConversationID, rec.InputTokens, rec.OutputTokens, rec.UserID, rec.IncidentID,
 	)
 	if err != nil {
 		log.Warn("record usage", "error", err)
