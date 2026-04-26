@@ -227,6 +227,12 @@ func main() {
 		defer salesPoller.Stop()
 	}
 
+	// Phase D1 follow-up — auto-summariser fired from the
+	// archive route. Wired with the dispatcher's agent client
+	// when available so it uses the API path; otherwise it
+	// falls back to a deterministic last-message stitcher.
+	autoSummary := chat.NewAutoSummariser(db.DB, log, dispatcher.AgentClient())
+
 	api := &server.API{
 		DB:          db.DB,
 		Store:       db,
@@ -236,6 +242,7 @@ func main() {
 		QueueMgr:    queueMgr,
 		Dispatcher:  dispatcher,
 		ActiveConvs: chat.NewActiveConversations(),
+		AutoSummary: autoSummary,
 		ClickUp:     cfg.ClickUp,
 		SyncEngine:  syncEngine,
 		CustomerMgr: customerMgr,

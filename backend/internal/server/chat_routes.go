@@ -1,6 +1,7 @@
 package server
 
 import (
+	"context"
 	"database/sql"
 	"encoding/json"
 	"fmt"
@@ -254,6 +255,14 @@ func (a *API) handleDeleteConversation(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
 	now := time.Now().UTC().Format(time.RFC3339)
 	a.DB.Exec("UPDATE conversations SET status='archived', updated_at=? WHERE id=?", now, id)
+
+	// Phase D1 follow-up — kick the auto-summariser asynchronously
+	// so the archive HTTP response is not blocked by a possibly
+	// 30s API call. SummariseAndStore is fully best-effort and
+	// won't panic on nil receivers / missing rows.
+	if a.AutoSummary != nil {
+		go a.AutoSummary.SummariseAndStore(context.Background(), id)
+	}
 
 	a.Bus.PublishJSON("chat.conversation", map[string]string{"id": id, "action": "archived"})
 	jsonOK(w, map[string]string{"id": id, "status": "archived"})

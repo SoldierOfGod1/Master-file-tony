@@ -44,6 +44,10 @@ type API struct {
 	// so the frontend can show "agent still working" after a
 	// page reload or WebSocket reconnect.
 	ActiveConvs *chat.ActiveConversations
+	// Phase D1 follow-up — best-effort summariser kicked when
+	// a conversation is archived. Non-blocking; goroutine inside
+	// the delete handler. nil means "skip" (early-boot tests).
+	AutoSummary *chat.AutoSummariser
 	ClickUp     config.ClickUpConfig
 	SyncEngine  *sync.Engine
 	CustomerMgr *customer.Manager

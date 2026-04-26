@@ -126,6 +126,17 @@ func NewDispatcherFromEnv(log *slog.Logger, bus *event.Bus, cli *Executor, db *s
 	})
 }
 
+// AgentClient returns the underlying API client, or nil when no
+// API key is set. Used by AutoSummariser to share the same model
+// for closing-summary writes when available — saves wiring a
+// second SDK and reuses the same retries/timeouts.
+func (d *Dispatcher) AgentClient() *AgentClient {
+	if d == nil {
+		return nil
+	}
+	return d.agent
+}
+
 // Dispatch picks the right path for a request and streams
 // progress to the bus. Falls back to CLI on any agent failure.
 // Returns the final response text the same way Executor.Execute
