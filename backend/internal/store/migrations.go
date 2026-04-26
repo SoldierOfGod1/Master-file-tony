@@ -408,6 +408,22 @@ var migrations = []string{
 		weekly_zar_cap REAL NOT NULL DEFAULT 0,
 		updated_at TEXT NOT NULL DEFAULT (datetime('now'))
 	)`,
+
+	// Phase D1 — cross-session agent memory. Per-user store the
+	// agent reads at the start of every run + writes via the
+	// remember tool. Closes the "agent forgets everything between
+	// sessions" gap flagged by the article review (2026-04-26).
+	// Last 10 rows by created_at injected into the system prompt.
+	// Kind tags it for the agent's own filtering: 'preference',
+	// 'incident_context', 'pattern', 'note'.
+	`CREATE TABLE IF NOT EXISTS agent_memory (
+		id INTEGER PRIMARY KEY AUTOINCREMENT,
+		user_id TEXT NOT NULL,
+		kind TEXT NOT NULL DEFAULT 'note',
+		body TEXT NOT NULL,
+		created_at TEXT NOT NULL DEFAULT (datetime('now'))
+	)`,
+	`CREATE INDEX IF NOT EXISTS idx_agent_memory_user_created ON agent_memory(user_id, created_at DESC)`,
 	// cost_records gains user_id so we can sum per-user without
 	// joining through conversations every time. Populated going
 	// forward; older rows stay '' (counted under the anonymous

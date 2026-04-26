@@ -3,6 +3,7 @@ package chat
 import (
 	"bytes"
 	"context"
+	"database/sql"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -41,24 +42,50 @@ type Tool struct {
 // tool's auth + audit trail going through the same pipeline as
 // the UI). Tools that need direct DB access can side-step but
 // most should not.
+//
+// memDB is optional and only used by the Phase D1 `remember` tool.
+// Pass nil and that tool gets a no-op handler that errors clearly.
 type ToolCatalogue struct {
 	tools   []Tool
 	baseURL string
 	client  *http.Client
+	memDB   *sql.DB
+	// userID is set per-call by the agent loop just before
+	// invoking a tool — Phase D1's remember tool needs to know
+	// which user_id to attribute the memory to. The agent loop
+	// already gates Write tools on UserID != "".
+	pendingUserID string
 }
 
-// NewToolCatalogue builds the standard 10-tool catalogue against
-// the given base URL (typically http://127.0.0.1:8080/api/v1).
-// Each entry mirrors an existing endpoint — the agent never
-// learns a new operation, just gains the ability to invoke ones
-// the UI already exposes.
+// NewToolCatalogue builds the standard 11-tool catalogue (10
+// existing endpoints plus Phase D1's remember) against the given
+// base URL (typically http://127.0.0.1:8080/api/v1). memDB enables
+// the remember tool — pass nil to disable D1 cleanly.
 func NewToolCatalogue(baseURL string) *ToolCatalogue {
+	return NewToolCatalogueWithDB(baseURL, nil)
+}
+
+func NewToolCatalogueWithDB(baseURL string, memDB *sql.DB) *ToolCatalogue {
 	c := &ToolCatalogue{
 		baseURL: baseURL,
 		client:  &http.Client{Timeout: 60 * time.Second},
+		memDB:   memDB,
 	}
 	c.register()
 	return c
+}
+
+// SetUserContext lets the agent loop tell the catalogue who the
+// current user is, just before issuing a tool call. The remember
+// tool reads from this field. Other tools ignore it (HTTP routes
+// already handle user context server-side).
+//
+// Not thread-safe — by design. Tool calls within one Run loop are
+// serialised; concurrent Run loops use separate ToolCatalogue
+// instances or accept the last-writer-wins behaviour. Production
+// agent runs are one user at a time per process.
+func (c *ToolCatalogue) SetUserContext(userID string) {
+	c.pendingUserID = userID
 }
 
 // All returns the catalogue as a slice safe for serialisation
@@ -226,6 +253,61 @@ func (c *ToolCatalogue) register() {
 			// here so runPostJSON forwards it through.
 			Run: c.runPostJSON("approvals", []string{"title", "summary", "context", "requester"}),
 		},
+		{
+			Name: "remember",
+			Description: "Persist one short observation to your cross-session memory for the current user. " +
+				"Use sparingly — only durable preferences, incident findings, or recurring patterns. Do NOT use " +
+				"for transient session details. Bodies > 2KB are truncated. Returns the persisted entry id. " +
+				"Memory entries are NOT shared across users.",
+			InputSchema: map[string]any{
+				"type": "object",
+				"properties": map[string]any{
+					"kind": map[string]any{
+						"type": "string",
+						"enum": []string{"preference", "incident_context", "pattern", "note"},
+						"description": "Memory category. preference = user habit, incident_context = current operational context, pattern = observed behaviour, note = anything else.",
+					},
+					"body": map[string]any{
+						"type":        "string",
+						"description": "One sentence ideally. Max 2KB.",
+					},
+				},
+				"required": []string{"body"},
+			},
+			// Not Write=true — agent_memory is local per-user
+			// state, not a destructive ops mutation. The
+			// approval gate would block useful learning.
+			Run: c.runRemember(),
+		},
+	}
+}
+
+// runRemember writes a memory entry tied to the current user.
+// Phase D1: the agent self-remembers via this tool. Refuses on
+// nil memDB or empty user context — both of which are operator
+// configuration errors and should be visible to the agent.
+func (c *ToolCatalogue) runRemember() func(context.Context, json.RawMessage) (any, error) {
+	return func(ctx context.Context, raw json.RawMessage) (any, error) {
+		if c.memDB == nil {
+			return nil, fmt.Errorf("remember disabled: agent_memory store not wired")
+		}
+		args, err := decodeArgs(raw)
+		if err != nil {
+			return nil, err
+		}
+		body, _ := args["body"].(string)
+		kind, _ := args["kind"].(string)
+		userID := c.pendingUserID
+		id, err := WriteMemory(c.memDB, userID, kind, body)
+		if err != nil {
+			return nil, err
+		}
+		return map[string]any{
+			"id":      id,
+			"kind":    kind,
+			"user_id": userID,
+			"saved":   true,
+		}, nil
 	}
 }
 

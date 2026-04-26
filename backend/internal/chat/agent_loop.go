@@ -116,6 +116,12 @@ func (a *AgentClient) Run(ctx context.Context, opts AgentRunOptions) (string, []
 	}
 	turns := []AgentTurn{}
 
+	// Phase D1 — let the catalogue know who's running so the
+	// remember tool can attribute the memory to the right user.
+	if a.cat != nil {
+		a.cat.SetUserContext(opts.UserID)
+	}
+
 	for turn := 0; turn < a.MaxTurns; turn++ {
 		req := anthropicRequest{
 			Model:        a.model,

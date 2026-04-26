@@ -43,6 +43,7 @@ type Dispatcher struct {
 	agent     *AgentClient
 	catalogue *ToolCatalogue
 	budget    *BudgetGate // Phase B3: per-user weekly cap
+	memDB     *sql.DB     // Phase D1: per-user agent_memory store
 
 	// AgentEnabledIntents is the set of intents the API path
 	// handles. Anything else (including unclear prompts) goes
@@ -94,6 +95,7 @@ func NewDispatcher(cfg DispatcherConfig) *Dispatcher {
 	}
 	if cfg.DB != nil {
 		d.budget = NewBudgetGate(cfg.DB, cfg.Logger)
+		d.memDB = cfg.DB
 	}
 	return d
 }
@@ -101,9 +103,10 @@ func NewDispatcher(cfg DispatcherConfig) *Dispatcher {
 // NewDispatcherFromEnv reads ANTHROPIC_API_KEY (and optionally
 // RAIN_AGENT_MODEL) from env and constructs the dispatcher.
 // Missing key => agent path off, CLI handles everything.
-// db is optional; nil disables Phase B3 budget gating.
+// db is optional; nil disables Phase B3 budget gating + Phase D1
+// agent memory.
 func NewDispatcherFromEnv(log *slog.Logger, bus *event.Bus, cli *Executor, db *sql.DB, baseURL string) *Dispatcher {
-	cat := NewToolCatalogue(baseURL)
+	cat := NewToolCatalogueWithDB(baseURL, db)
 	return NewDispatcher(DispatcherConfig{
 		Logger:    log,
 		Bus:       bus,
@@ -177,6 +180,14 @@ func (d *Dispatcher) Dispatch(ctx context.Context, req ExecuteRequest) (string, 
 		systemPrompt += fmt.Sprintf(" The current user is %q.", req.UserID)
 	} else {
 		systemPrompt += " The current user is anonymous; refuse any action that mutates state."
+	}
+	// Phase D1 — inject the user's recent memory entries so the
+	// agent recalls preferences, prior incident context, and
+	// observed patterns across sessions. Non-anonymous only.
+	if d.memDB != nil && req.UserID != "" {
+		mem := LoadRecentMemory(d.memDB, req.UserID)
+		systemPrompt += FormatForPrompt(mem)
+		systemPrompt += "\nIf you learn something memorable about the user (a preference, an incident finding, a recurring pattern), call the `remember` tool to persist it. Be selective — only memorable things, not chit-chat."
 	}
 	// Phase B3 — surface budget warning to the model so it can
 	// be more economical on tool-use depth when the user is near

@@ -10,7 +10,7 @@ import (
 	"testing"
 )
 
-func TestToolCatalogue_AllTenToolsRegistered(t *testing.T) {
+func TestToolCatalogue_AllToolsRegistered(t *testing.T) {
 	c := NewToolCatalogue("http://localhost:8080/api/v1")
 	tools := c.All()
 	want := []string{
@@ -18,6 +18,7 @@ func TestToolCatalogue_AllTenToolsRegistered(t *testing.T) {
 		"platform_health", "platform_alerts", "incident_list",
 		"imsi_audit_search", "imsi_override_get",
 		"imsi_override_set", "approval_create",
+		"remember", // Phase D1
 	}
 	if len(tools) != len(want) {
 		t.Fatalf("expected %d tools, got %d", len(want), len(tools))
@@ -32,8 +33,8 @@ func TestToolCatalogue_AllTenToolsRegistered(t *testing.T) {
 func TestToolCatalogue_Schema_NoRunCallbackLeak(t *testing.T) {
 	c := NewToolCatalogue("http://localhost:8080/api/v1")
 	schema := c.Schema()
-	if len(schema) != 10 {
-		t.Fatalf("expected 10 schema entries, got %d", len(schema))
+	if len(schema) != 11 {
+		t.Fatalf("expected 11 schema entries, got %d", len(schema))
 	}
 	for i, s := range schema {
 		if _, ok := s["Run"]; ok {
@@ -70,6 +71,10 @@ func TestToolCatalogue_WriteFlagsCorrect(t *testing.T) {
 		"imsi_override_get":    false,
 		"imsi_override_set":    true,
 		"approval_create":      true,
+		// remember is intentionally non-Write — agent_memory is local
+		// per-user state, not a destructive ops mutation, so the
+		// approval gate doesn't fire on it.
+		"remember": false,
 	}
 	for name, want := range expected {
 		got := c.Find(name)
