@@ -2,7 +2,7 @@
    CostAnalyticsPage — HUD breakdown with charts inside panels.
    ============================================================ */
 
-import { DollarSign, TrendingDown, TrendingUp } from 'lucide-react';
+import { Banknote, TrendingDown, TrendingUp } from 'lucide-react';
 import { useCommandCentre } from '../context/CommandCentreContext';
 import DonutChart from '../components/charts/DonutChart';
 import BarChart from '../components/charts/BarChart';
@@ -11,6 +11,7 @@ import HudSummaryStrip from '../components/shared/HudSummaryStrip';
 import { HudChip, HudStatusLed } from '../components/shared/HudChip';
 import hudStyles from '../theme/hud.module.css';
 import styles from './CostAnalyticsPage.module.css';
+import BudgetsTile from './BudgetsTile';
 
 function formatRand(value: number): string {
   if (value >= 1_000_000) return `R${(value / 1_000_000).toFixed(2)}M`;
@@ -69,7 +70,7 @@ export default function CostAnalyticsPage() {
           title="Model Breakdown"
           accent="#ff7de0"
           leading={<HudStatusLed color="#ff7de0" />}
-          meta={<DollarSign size={10} />}
+          meta={<Banknote size={10} />}
         >
           <div className={styles.chartWrap}>
             <DonutChart segments={segments} size={180} />
@@ -110,6 +111,11 @@ export default function CostAnalyticsPage() {
           )}
         </div>
       </HudPanel>
+
+      {/* Phase B3 + D-series follow-up — per-user weekly budget tile.
+          Distinct from the model-cost breakdown above: this one
+          attributes spend to the human + shows tripwire state. */}
+      <BudgetsTile />
     </div>
   );
 }
