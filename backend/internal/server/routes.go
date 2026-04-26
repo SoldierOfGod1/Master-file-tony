@@ -48,6 +48,11 @@ type API struct {
 	// a conversation is archived. Non-blocking; goroutine inside
 	// the delete handler. nil means "skip" (early-boot tests).
 	AutoSummary *chat.AutoSummariser
+	// Phase C1 follow-up — per-conversation ring buffer of
+	// recent chat.stream events for replay on WebSocket
+	// reconnect. Subscribed to the bus at startup; nil means
+	// no replay (clients still get live events).
+	StreamBuf   *chat.StreamBuffer
 	ClickUp     config.ClickUpConfig
 	SyncEngine  *sync.Engine
 	CustomerMgr *customer.Manager

@@ -233,6 +233,13 @@ func main() {
 	// falls back to a deterministic last-message stitcher.
 	autoSummary := chat.NewAutoSummariser(db.DB, log, dispatcher.AgentClient())
 
+	// Phase C1 follow-up — stream replay buffer. Subscribes to
+	// chat.stream / chat.complete / chat.error topics and rings
+	// the last 100 chunks per conversation so reload / reconnect
+	// can replay missed chunks via /conversations/{id}/replay.
+	streamBuf := chat.NewStreamBuffer()
+	streamBuf.AttachToBus(bus)
+
 	api := &server.API{
 		DB:          db.DB,
 		Store:       db,
@@ -243,6 +250,7 @@ func main() {
 		Dispatcher:  dispatcher,
 		ActiveConvs: chat.NewActiveConversations(),
 		AutoSummary: autoSummary,
+		StreamBuf:   streamBuf,
 		ClickUp:     cfg.ClickUp,
 		SyncEngine:  syncEngine,
 		CustomerMgr: customerMgr,

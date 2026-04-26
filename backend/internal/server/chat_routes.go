@@ -32,6 +32,12 @@ func RegisterChatRoutes(mux *http.ServeMux, api *API) {
 	// still mid-stream and should keep the WebSocket open.
 	mux.HandleFunc("GET /api/v1/conversations/{id}/active", api.handleConversationActive)
 
+	// Phase C1 follow-up — replay buffer. Returns the chunks
+	// emitted while the client was offline, oldest-first. The
+	// frontend writes them into the streaming bubble before
+	// unmuting the live WebSocket so nothing's lost on reload.
+	mux.HandleFunc("GET /api/v1/conversations/{id}/replay", api.handleConversationReplay)
+
 	// Chat execution
 	mux.HandleFunc("POST /api/v1/chat", api.handleChat)
 
@@ -50,6 +56,31 @@ func RegisterChatRoutes(mux *http.ServeMux, api *API) {
 	// Chat config
 	mux.HandleFunc("GET /api/v1/chat/config", api.handleGetChatConfig)
 	mux.HandleFunc("PUT /api/v1/chat/config", api.handleUpdateChatConfig)
+}
+
+// handleConversationReplay returns the buffered chat.stream
+// events for one conversation in oldest-first order. Each entry
+// is the original JSON payload as emitted to the bus, so the
+// frontend can feed them through the same handler as live events.
+//
+// Empty array when nothing is buffered (no recent activity OR
+// the conversation has finished and the buffer was cleared).
+func (a *API) handleConversationReplay(w http.ResponseWriter, r *http.Request) {
+	id := strings.TrimSpace(r.PathValue("id"))
+	if id == "" {
+		jsonError(w, 400, "conversation id required")
+		return
+	}
+	if a.StreamBuf == nil {
+		jsonOK(w, []any{})
+		return
+	}
+	raw := a.StreamBuf.Replay(id)
+	out := make([]json.RawMessage, 0, len(raw))
+	for _, p := range raw {
+		out = append(out, json.RawMessage(p))
+	}
+	jsonOK(w, out)
 }
 
 // handleConversationActive returns the live streaming state for
