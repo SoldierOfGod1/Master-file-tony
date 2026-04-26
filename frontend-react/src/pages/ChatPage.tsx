@@ -147,6 +147,19 @@ interface ChatStreamPayload {
 
 /* ----- Display message: local extension of Message ----- */
 
+/* Phase C2 — agent-turn shape mirrors backend AgentTurn in
+   chat/agent_loop.go. Streamed via chat.stream metadata.agent_turn
+   on every tool_call / tool_result / write_blocked / final event. */
+interface AgentTurn {
+  readonly kind: 'thinking' | 'tool_call' | 'tool_result' | 'write_blocked' | 'final';
+  readonly tool_name?: string;
+  readonly tool_input?: unknown;
+  readonly tool_result?: unknown;
+  readonly text?: string;
+  readonly error?: string;
+  readonly at?: string;
+}
+
 interface DisplayMessage {
   readonly id: number;
   readonly conversationId: string;
@@ -157,6 +170,8 @@ interface DisplayMessage {
   readonly createdAt: string;
   readonly isStreaming?: boolean;
   readonly isError?: boolean;
+  /* Phase C2 — accumulated tool-use trail for this message. */
+  readonly agentTurns?: readonly AgentTurn[];
 }
 
 /* ----- Helpers ----- */
@@ -272,6 +287,153 @@ function MessageBubble({ msg }: { readonly msg: DisplayMessage }) {
                 {(msg.metadata.files_changed as string[]).length} file(s) changed
               </span>
             )}
+        </div>
+      )}
+
+      {!isUser && msg.agentTurns && msg.agentTurns.length > 0 && (
+        <ToolCallAuditPane turns={msg.agentTurns} />
+      )}
+    </div>
+  );
+}
+
+/* ----- Phase C2 tool-call audit pane ----------------------------
+   Inspectable trail of every agent decision. Rendered below the
+   final answer bubble. Collapsed by default — operators only open
+   it when something looks off. Structured turns (tool_call /
+   tool_result / write_blocked) live in msg.agentTurns; the
+   summary line counts non-final turns. */
+function ToolCallAuditPane({ turns }: { readonly turns: readonly AgentTurn[] }) {
+  const [open, setOpen] = useState(false);
+  const opCount = turns.filter((t) => t.kind !== 'final' && t.kind !== 'thinking').length;
+  if (opCount === 0) return null;
+
+  const summary = turns.reduce<{ tools: number; blocked: number; errors: number }>(
+    (acc, t) => {
+      if (t.kind === 'tool_call') acc.tools += 1;
+      if (t.kind === 'write_blocked') acc.blocked += 1;
+      if (t.kind === 'tool_result' && t.error) acc.errors += 1;
+      return acc;
+    },
+    { tools: 0, blocked: 0, errors: 0 },
+  );
+
+  return (
+    <div
+      style={{
+        marginTop: 6,
+        fontSize: 10,
+        fontFamily: 'var(--font-mono, monospace)',
+      }}
+    >
+      <button
+        type="button"
+        onClick={() => setOpen((o) => !o)}
+        style={{
+          padding: '2px 8px',
+          fontSize: 10,
+          letterSpacing: '0.06em',
+          textTransform: 'uppercase',
+          color: '#b980ff',
+          background: 'rgba(185, 128, 255, 0.06)',
+          border: '1px solid rgba(185, 128, 255, 0.3)',
+          borderRadius: 3,
+          cursor: 'pointer',
+          fontFamily: 'inherit',
+        }}
+      >
+        {open ? '▼' : '▶'} {summary.tools} tool call{summary.tools === 1 ? '' : 's'}
+        {summary.blocked > 0 && <span style={{ color: '#ff7b7b' }}> · {summary.blocked} blocked</span>}
+        {summary.errors > 0 && <span style={{ color: '#ffaa00' }}> · {summary.errors} error{summary.errors === 1 ? '' : 's'}</span>}
+      </button>
+      {open && (
+        <div style={{ marginTop: 6 }}>
+          {turns.map((t, i) => (
+            <ToolCallRow key={i} turn={t} />
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function ToolCallRow({ turn }: { readonly turn: AgentTurn }) {
+  const [expanded, setExpanded] = useState(false);
+  const colour =
+    turn.kind === 'write_blocked'
+      ? '#ff7b7b'
+      : turn.kind === 'tool_result' && turn.error
+        ? '#ffaa00'
+        : turn.kind === 'final'
+          ? '#6ff2a0'
+          : '#7cc6ff';
+  const arrow =
+    turn.kind === 'tool_call'
+      ? '→'
+      : turn.kind === 'tool_result'
+        ? '←'
+        : turn.kind === 'write_blocked'
+          ? '⛔'
+          : turn.kind === 'final'
+            ? '✓'
+            : '·';
+  const summary =
+    turn.kind === 'final'
+      ? '(final answer)'
+      : turn.tool_name
+        ? turn.tool_name
+        : turn.error
+          ? turn.error.slice(0, 80)
+          : turn.kind;
+  return (
+    <div
+      style={{
+        padding: '4px 8px',
+        marginBottom: 2,
+        border: `1px solid rgba(124, 198, 255, 0.15)`,
+        borderLeft: `3px solid ${colour}`,
+        borderRadius: 3,
+        background: 'rgba(0, 240, 255, 0.02)',
+      }}
+    >
+      <div
+        onClick={() => setExpanded((e) => !e)}
+        style={{ cursor: 'pointer', display: 'flex', gap: 6, alignItems: 'baseline' }}
+      >
+        <span style={{ color: colour, fontWeight: 600 }}>{arrow}</span>
+        <span style={{ color: colour, fontSize: 9, letterSpacing: '0.06em', textTransform: 'uppercase' }}>
+          {turn.kind}
+        </span>
+        <span style={{ flex: 1, opacity: 0.85 }}>{summary}</span>
+        {turn.at && (
+          <span style={{ fontSize: 8, opacity: 0.45 }}>
+            {new Date(turn.at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' })}
+          </span>
+        )}
+      </div>
+      {expanded && (
+        <div style={{ marginTop: 4, paddingLeft: 12, fontSize: 9, opacity: 0.85 }}>
+          {turn.tool_input !== undefined && (
+            <div>
+              <div style={{ opacity: 0.6 }}>input:</div>
+              <pre style={{ margin: 0, whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>
+                {JSON.stringify(turn.tool_input, null, 2)}
+              </pre>
+            </div>
+          )}
+          {turn.tool_result !== undefined && (
+            <div style={{ marginTop: 4 }}>
+              <div style={{ opacity: 0.6 }}>result:</div>
+              <pre style={{ margin: 0, whiteSpace: 'pre-wrap', wordBreak: 'break-word', maxHeight: 240, overflow: 'auto' }}>
+                {JSON.stringify(turn.tool_result, null, 2)}
+              </pre>
+            </div>
+          )}
+          {turn.error && (
+            <div style={{ marginTop: 4, color: '#ff7b7b' }}>
+              error: {turn.error}
+            </div>
+          )}
         </div>
       )}
     </div>
@@ -461,6 +623,16 @@ export default function ChatPage() {
               }
               const createdAt = new Date().toISOString();
 
+              // Phase C2 — extract agent_turn metadata if present so
+              // the audit pane can render the structured tool trail.
+              const turnFromMeta = (() => {
+                const m = payload.metadata as Record<string, unknown> | undefined;
+                if (!m || typeof m !== 'object') return undefined;
+                const t = (m as { agent_turn?: AgentTurn }).agent_turn;
+                if (!t || typeof t !== 'object') return undefined;
+                return t;
+              })();
+
               setMessages((prev) => {
                 const idx = prev.findIndex(
                   (m) => m.id === newId && m.isStreaming,
@@ -478,9 +650,14 @@ export default function ChatPage() {
                     return prev;
                   }
                   const updated = [...prev];
+                  const existingTurns = updated[idx].agentTurns ?? [];
+                  const nextTurns = turnFromMeta
+                    ? [...existingTurns, turnFromMeta]
+                    : existingTurns;
                   updated[idx] = {
                     ...updated[idx],
                     content: existing + payload.content,
+                    agentTurns: nextTurns,
                   };
                   return updated;
                 }
@@ -494,6 +671,7 @@ export default function ChatPage() {
                   createdAt,
                   isStreaming: true,
                   isError: false,
+                  agentTurns: turnFromMeta ? [turnFromMeta] : undefined,
                 };
                 return [...prev, streamMsg];
               });
