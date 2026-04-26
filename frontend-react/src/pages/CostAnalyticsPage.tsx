@@ -12,6 +12,7 @@ import { HudChip, HudStatusLed } from '../components/shared/HudChip';
 import hudStyles from '../theme/hud.module.css';
 import styles from './CostAnalyticsPage.module.css';
 import BudgetsTile from './BudgetsTile';
+import MemoryTile from './MemoryTile';
 
 function formatRand(value: number): string {
   if (value >= 1_000_000) return `R${(value / 1_000_000).toFixed(2)}M`;
@@ -116,6 +117,11 @@ export default function CostAnalyticsPage() {
           Distinct from the model-cost breakdown above: this one
           attributes spend to the human + shows tripwire state. */}
       <BudgetsTile />
+
+      {/* Phase D1 follow-up — operator panel for the agent's
+          cross-session memory. Inspect / pin / scrub entries that
+          steer every subsequent agent run for that user. */}
+      <MemoryTile />
     </div>
   );
 }

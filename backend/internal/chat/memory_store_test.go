@@ -121,6 +121,50 @@ func TestLoadRecentMemory_NilOrEmptyUser(t *testing.T) {
 	}
 }
 
+func TestListMemory_AllUsersWhenEmptyFilter(t *testing.T) {
+	db := newMemoryDB(t)
+	_, _ = WriteMemory(db, "alice", "note", "alice 1")
+	_, _ = WriteMemory(db, "bob", "note", "bob 1")
+	got := ListMemory(db, "")
+	if len(got) != 2 {
+		t.Errorf("expected 2 across all users, got %d", len(got))
+	}
+}
+
+func TestListMemory_FilteredByUser(t *testing.T) {
+	db := newMemoryDB(t)
+	_, _ = WriteMemory(db, "alice", "note", "alice")
+	_, _ = WriteMemory(db, "bob", "note", "bob")
+	got := ListMemory(db, "alice")
+	if len(got) != 1 || got[0].UserID != "alice" {
+		t.Errorf("expected only alice's row, got %+v", got)
+	}
+}
+
+func TestDeleteMemory_Removes(t *testing.T) {
+	db := newMemoryDB(t)
+	id, _ := WriteMemory(db, "alice", "note", "to delete")
+	ok, err := DeleteMemory(db, id)
+	if err != nil || !ok {
+		t.Fatalf("delete: ok=%v err=%v", ok, err)
+	}
+	got := LoadRecentMemory(db, "alice")
+	if len(got) != 0 {
+		t.Errorf("expected empty after delete, got %+v", got)
+	}
+}
+
+func TestDeleteMemory_MissingReturnsFalse(t *testing.T) {
+	db := newMemoryDB(t)
+	ok, err := DeleteMemory(db, 99999)
+	if err != nil {
+		t.Fatalf("delete: %v", err)
+	}
+	if ok {
+		t.Error("expected ok=false for missing id")
+	}
+}
+
 func TestFormatForPrompt(t *testing.T) {
 	got := FormatForPrompt(nil)
 	if got != "" {

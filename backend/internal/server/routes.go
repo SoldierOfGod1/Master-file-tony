@@ -164,6 +164,7 @@ func NewRouter(api *API, hub *ws.Hub, staticDir string) http.Handler {
 	// Platform Monitor — rain BSS middleware + satellite apps up/down
 	RegisterPlatformsRoutes(mux, api)
 	RegisterBudgetsRoutes(mux, api)
+	RegisterMemoryRoutes(mux, api)
 
 	// Axiom schema explorer + Snowflake-middleware correlation map
 	RegisterAxiomRoutes(mux, api)
