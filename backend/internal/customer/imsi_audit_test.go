@@ -27,7 +27,8 @@ func newAuditTestDB(t *testing.T) *sql.DB {
 		winning_phase TEXT NOT NULL,
 		imsi_count INTEGER NOT NULL DEFAULT 0,
 		response_code INTEGER NOT NULL DEFAULT 200,
-		reason TEXT NOT NULL DEFAULT ''
+		reason TEXT NOT NULL DEFAULT '',
+		incident_id TEXT
 	)`)
 	if err != nil {
 		t.Fatalf("create audit table: %v", err)
@@ -95,5 +96,49 @@ func TestWriteIMSIAudit_PhaseLabels(t *testing.T) {
 	}
 	if got != len(phases) {
 		t.Errorf("expected %d distinct phases, got %d", len(phases), got)
+	}
+}
+
+func TestWriteIMSIAudit_IncidentIDFromContext(t *testing.T) {
+	db := newAuditTestDB(t)
+	ctx := WithIncidentID(context.Background(), "INC-1234")
+	if err := writeIMSIAudit(ctx, db, "ind-1", "cdr_usage", "product_path", 2); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	var got string
+	if err := db.QueryRow(`SELECT incident_id FROM imsi_lookup_audit WHERE individual_id = 'ind-1'`).Scan(&got); err != nil {
+		t.Fatalf("read back: %v", err)
+	}
+	if got != "INC-1234" {
+		t.Errorf("expected incident_id INC-1234, got %q", got)
+	}
+}
+
+func TestWriteIMSIAudit_NoIncidentInContext(t *testing.T) {
+	db := newAuditTestDB(t)
+	if err := writeIMSIAudit(context.Background(), db, "ind-2", "usage", "view_account", 1); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	var got string
+	if err := db.QueryRow(`SELECT COALESCE(incident_id,'') FROM imsi_lookup_audit WHERE individual_id = 'ind-2'`).Scan(&got); err != nil {
+		t.Fatalf("read back: %v", err)
+	}
+	if got != "" {
+		t.Errorf("expected empty incident_id when not set, got %q", got)
+	}
+}
+
+func TestIncidentIDFromContext(t *testing.T) {
+	if got := IncidentIDFromContext(context.Background()); got != "" {
+		t.Errorf("expected empty when unset, got %q", got)
+	}
+	ctx := WithIncidentID(context.Background(), "INC-1")
+	if got := IncidentIDFromContext(ctx); got != "INC-1" {
+		t.Errorf("expected INC-1, got %q", got)
+	}
+	// Empty id should NOT poison the context with a zero-value entry.
+	ctx2 := WithIncidentID(context.Background(), "")
+	if got := IncidentIDFromContext(ctx2); got != "" {
+		t.Errorf("empty id should be a no-op, got %q", got)
 	}
 }

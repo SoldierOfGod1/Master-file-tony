@@ -1470,21 +1470,53 @@ func imsiInts(srcs []IMSISource) []int64 {
 	return out
 }
 
+// incidentIDCtxKey is the context.Context key for the active
+// incident_id. Phase D2 follow-up: lets us thread incident_id
+// from the HTTP handler (or agent dispatcher) all the way down
+// to writeIMSIAudit without touching every intermediate signature
+// in this file. The Customer 360 handler is the producer; this
+// package is the consumer.
+type ctxKeyIncidentID struct{}
+
+// WithIncidentID returns a derived context carrying the
+// incident_id so audit writes inside the cascade can tag rows.
+// Public so the server package + agent dispatcher can set it.
+func WithIncidentID(ctx context.Context, id string) context.Context {
+	if id == "" {
+		return ctx
+	}
+	return context.WithValue(ctx, ctxKeyIncidentID{}, id)
+}
+
+// IncidentIDFromContext extracts the value set by WithIncidentID.
+// Returns "" when not set — same shape as the optional incident
+// columns elsewhere.
+func IncidentIDFromContext(ctx context.Context) string {
+	if v, ok := ctx.Value(ctxKeyIncidentID{}).(string); ok {
+		return v
+	}
+	return ""
+}
+
 // writeIMSIAudit persists one row per resolveIMSIs call. POPIA
 // audit trail per Phase 3 of docs/axiom/sim-diagnostics-plan.md.
 // Best-effort in this commit — Phase 2 promotes audit-write
 // failure to a fail-closed HTTP 500 by changing resolveIMSIs's
 // public return signature. Until then, audit errors log and the
 // lookup proceeds.
+//
+// incident_id is sourced from the context (Phase D2) so callers
+// upstream don't need to thread an extra arg through every layer.
 func writeIMSIAudit(ctx context.Context, db *sql.DB, individualID, source, winningPhase string, imsiCount int) error {
 	if db == nil || individualID == "" {
 		return nil
 	}
+	incidentID := IncidentIDFromContext(ctx)
 	ctx, cancel := context.WithTimeout(ctx, 2*time.Second)
 	defer cancel()
 	_, err := db.ExecContext(ctx,
-		`INSERT INTO imsi_lookup_audit (individual_id, source, winning_phase, imsi_count, response_code) VALUES (?, ?, ?, ?, ?)`,
-		individualID, source, winningPhase, imsiCount, 200,
+		`INSERT INTO imsi_lookup_audit (individual_id, source, winning_phase, imsi_count, response_code, incident_id) VALUES (?, ?, ?, ?, ?, ?)`,
+		individualID, source, winningPhase, imsiCount, 200, incidentID,
 	)
 	if err != nil {
 		return fmt.Errorf("imsi_lookup_audit insert: %w", err)

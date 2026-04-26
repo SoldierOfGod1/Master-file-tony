@@ -647,10 +647,14 @@ func (a *API) handleCustomerLookup(w http.ResponseWriter, r *http.Request) {
 		mode, value = "phone", phone
 	}
 
+	// Phase D2 — incident_id from ?incident_id= goes onto the
+	// context so writeIMSIAudit deep in the cascade can tag rows
+	// without a signature change every layer of the way down.
+	ctx := customer.WithIncidentID(r.Context(), strings.TrimSpace(q.Get("incident_id")))
 	// Multi-DB resolver when a manager is available; falls back to the
 	// legacy single-pool path for any caller that isn't using the
 	// prod cluster (e.g. the merged-DB SIT install).
-	view, err := customer.LookupProd(r.Context(), a.CustomerMgr, a.Log, mode, value)
+	view, err := customer.LookupProd(ctx, a.CustomerMgr, a.Log, mode, value)
 	// Activity feed: emit one row per successful lookup so the
 	// Dashboard card ticks up. Only log successful lookups with a
 	// resolved identity — candidate pickers and 404s aren't
@@ -673,7 +677,7 @@ func (a *API) handleCustomerLookup(w http.ResponseWriter, r *http.Request) {
 		// works against the SIT (merged-DB) cluster.
 		pool, _, perr := a.selectPool(r)
 		if perr == nil {
-			if legacy, lerr := customer.Lookup(r.Context(), pool, a.Log, mode, value); lerr == nil {
+			if legacy, lerr := customer.Lookup(ctx, pool, a.Log, mode, value); lerr == nil {
 				jsonOK(w, legacy)
 				return
 			}
@@ -696,10 +700,13 @@ func (a *API) handleCustomerByID(w http.ResponseWriter, r *http.Request) {
 		mapDBError(w, err)
 		return
 	}
-	view, err := customer.LookupProd(r.Context(), a.CustomerMgr, a.Log, "id", id)
+	// Phase D2 — same context-based incident_id plumbing as the
+	// search endpoint so the by-id path tags audit rows correctly too.
+	ctx := customer.WithIncidentID(r.Context(), strings.TrimSpace(r.URL.Query().Get("incident_id")))
+	view, err := customer.LookupProd(ctx, a.CustomerMgr, a.Log, "id", id)
 	if err != nil {
 		// Fall back to single-pool legacy lookup.
-		view, err = customer.Lookup(r.Context(), pool, a.Log, "id", id)
+		view, err = customer.Lookup(ctx, pool, a.Log, "id", id)
 	}
 	_ = pool
 	if err != nil {
