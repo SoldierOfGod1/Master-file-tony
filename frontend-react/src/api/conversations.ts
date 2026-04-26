@@ -39,6 +39,28 @@ export async function updateConversation(
   );
 }
 
+/* Phase C1 — streaming-status probe.
+   Frontend polls this on conversation switch / page reload to know
+   whether the agent is mid-stream and the WebSocket should stay
+   attached. */
+export interface ConversationActiveState {
+  readonly streaming: boolean;
+  readonly info: {
+    readonly conversation_id: string;
+    readonly path: 'cli' | 'agent';
+    readonly user_id?: string;
+    readonly started_at: string;
+  } | null;
+}
+
+export async function getConversationActive(
+  id: string,
+): Promise<ConversationActiveState | null> {
+  return apiGet<ConversationActiveState>(
+    `/conversations/${encodeURIComponent(id)}/active`,
+  );
+}
+
 export async function exportConversation(id: string): Promise<string | null> {
   const url = `/api/v1/conversations/${encodeURIComponent(id)}/export?format=md`;
 

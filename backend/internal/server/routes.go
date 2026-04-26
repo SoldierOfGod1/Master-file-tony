@@ -39,6 +39,11 @@ type API struct {
 	// path is the only entry. Wire from main.go via
 	// chat.NewDispatcherFromEnv after building the catalogue.
 	Dispatcher  *chat.Dispatcher
+	// Phase C1 — in-flight conversation registry, populated by
+	// chat handlers and read by the streaming-status endpoint
+	// so the frontend can show "agent still working" after a
+	// page reload or WebSocket reconnect.
+	ActiveConvs *chat.ActiveConversations
 	ClickUp     config.ClickUpConfig
 	SyncEngine  *sync.Engine
 	CustomerMgr *customer.Manager

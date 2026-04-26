@@ -28,6 +28,7 @@ import {
   createConversation,
   getConversation,
   exportConversation,
+  getConversationActive,
 } from '../api/conversations';
 import { sendMessage, getConversationUsage } from '../api/chat';
 import LoopOperatorPanel from './LoopOperatorPanel';
@@ -489,6 +490,13 @@ export default function ChatPage() {
   const [isStreaming, setIsStreaming] = useState(false);
   const streamingIdRef = useRef<number>(-1);
 
+  // Phase C1 — resume indicator. When the page reloads or the user
+  // switches to a conversation that has an in-flight agent run, we
+  // show "agent still working — newer chunks will resume here" so
+  // the user knows to wait. The WebSocket stays attached and any
+  // chunks emitted from now on will land in messages normally.
+  const [resumeInfo, setResumeInfo] = useState<{ path: string; startedAt: string } | null>(null);
+
   // Refs
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
@@ -531,6 +539,18 @@ export default function ChatPage() {
     setIsWaiting(false);
     setIsStreaming(false);
     setRealTokens(undefined);
+    setResumeInfo(null);
+    // Phase C1 — probe streaming status. If the agent is still
+    // working on a previous prompt we render an indicator so the
+    // user knows new chunks will continue arriving.
+    void getConversationActive(id).then((s) => {
+      if (s?.streaming && s.info) {
+        setResumeInfo({ path: s.info.path, startedAt: s.info.started_at });
+        setIsStreaming(true);
+      } else {
+        setResumeInfo(null);
+      }
+    });
     setModelHint(undefined);
 
     const data = await getConversation(id);
@@ -1070,7 +1090,23 @@ export default function ChatPage() {
 
             {/* Messages */}
             <div className={styles.messagesContainer}>
-              {messages.length === 0 && !isWaiting && !isStreaming && (
+              {resumeInfo && (
+                <div
+                  style={{
+                    margin: '8px 12px',
+                    padding: '6px 10px',
+                    border: '1px solid rgba(185, 128, 255, 0.4)',
+                    background: 'rgba(185, 128, 255, 0.06)',
+                    borderRadius: 4,
+                    fontSize: 11,
+                    color: '#b980ff',
+                    fontFamily: 'var(--font-mono, monospace)',
+                  }}
+                >
+                  ↻ Resumed mid-stream — agent still working on the previous prompt ({resumeInfo.path} path, started {new Date(resumeInfo.startedAt).toLocaleTimeString()}). New chunks will appear below as they arrive.
+                </div>
+              )}
+              {messages.length === 0 && !isWaiting && !isStreaming && !resumeInfo && (
                 <OnboardingCards onPick={(p) => setInputText(p)} />
               )}
               {messages.map((msg) => (

@@ -25,6 +25,11 @@ func RegisterChatRoutes(mux *http.ServeMux, api *API) {
 	// Real token usage per conversation (backs the Context Gauge)
 	mux.HandleFunc("GET /api/v1/conversations/{id}/usage", api.handleConversationUsage)
 
+	// Phase C1 — streaming status. Frontend hits this on
+	// conversation switch / page reload to know if the agent is
+	// still mid-stream and should keep the WebSocket open.
+	mux.HandleFunc("GET /api/v1/conversations/{id}/active", api.handleConversationActive)
+
 	// Chat execution
 	mux.HandleFunc("POST /api/v1/chat", api.handleChat)
 
@@ -43,6 +48,30 @@ func RegisterChatRoutes(mux *http.ServeMux, api *API) {
 	// Chat config
 	mux.HandleFunc("GET /api/v1/chat/config", api.handleGetChatConfig)
 	mux.HandleFunc("PUT /api/v1/chat/config", api.handleUpdateChatConfig)
+}
+
+// handleConversationActive returns the live streaming state for
+// a conversation. Phase C1 of the agent-orchestrator plan.
+// Response shape: { "streaming": bool, "info": {path, user_id,
+// started_at} | null }. Used by the frontend on conversation
+// switch / page reload to decide whether to show "agent still
+// working" + keep the WebSocket attached.
+func (a *API) handleConversationActive(w http.ResponseWriter, r *http.Request) {
+	id := strings.TrimSpace(r.PathValue("id"))
+	if id == "" {
+		jsonError(w, 400, "conversation id required")
+		return
+	}
+	if a.ActiveConvs == nil {
+		jsonOK(w, map[string]any{"streaming": false, "info": nil})
+		return
+	}
+	st, ok := a.ActiveConvs.Get(id)
+	if !ok {
+		jsonOK(w, map[string]any{"streaming": false, "info": nil})
+		return
+	}
+	jsonOK(w, map[string]any{"streaming": true, "info": st})
 }
 
 // handleClassifyIntent runs ClassifyIntent over a prompt and
@@ -106,6 +135,12 @@ func (a *API) handleChatAgent(w http.ResponseWriter, r *http.Request) {
 		var convUserID string
 		_ = a.DB.QueryRow("SELECT user_id FROM conversations WHERE id = ?", body.ConversationID).Scan(&convUserID)
 		userID = convUserID
+	}
+	// Phase C1 — mark the conversation as in-flight so the
+	// frontend's reconnect probe can detect "still streaming".
+	if a.ActiveConvs != nil {
+		a.ActiveConvs.Begin(body.ConversationID, "agent", userID)
+		defer a.ActiveConvs.End(body.ConversationID)
 	}
 	resp, err := a.Dispatcher.Dispatch(r.Context(), chat.ExecuteRequest{
 		ConversationID: body.ConversationID,
@@ -308,6 +343,14 @@ func (a *API) handleChat(w http.ResponseWriter, r *http.Request) {
 	if a.QueueMgr == nil {
 		jsonError(w, 500, "chat queue manager not initialised")
 		return
+	}
+
+	// Phase C1 — register the in-flight stream so the frontend's
+	// reconnect probe can detect "still streaming" after a reload.
+	// CLI path uses the same registry as the agent path.
+	if a.ActiveConvs != nil {
+		a.ActiveConvs.Begin(body.ConversationID, "cli", "")
+		defer a.ActiveConvs.End(body.ConversationID)
 	}
 
 	response, err := a.QueueMgr.Submit(chat.ExecuteRequest{

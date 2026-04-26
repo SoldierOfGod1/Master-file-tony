@@ -235,6 +235,7 @@ func main() {
 		Hub:         hub,
 		QueueMgr:    queueMgr,
 		Dispatcher:  dispatcher,
+		ActiveConvs: chat.NewActiveConversations(),
 		ClickUp:     cfg.ClickUp,
 		SyncEngine:  syncEngine,
 		CustomerMgr: customerMgr,
