@@ -1,6 +1,7 @@
 package server
 
 import (
+	"context"
 	"database/sql"
 	"encoding/json"
 	"log/slog"
@@ -9,6 +10,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"github.com/SoldierOfGod1/command-centre/internal/chat"
@@ -16,6 +18,9 @@ import (
 	"github.com/SoldierOfGod1/command-centre/internal/customer"
 	"github.com/SoldierOfGod1/command-centre/internal/event"
 	"github.com/SoldierOfGod1/command-centre/internal/middleware"
+	"github.com/SoldierOfGod1/command-centre/internal/platforms"
+	"github.com/SoldierOfGod1/command-centre/internal/runner"
+	"github.com/SoldierOfGod1/command-centre/internal/sales"
 	"github.com/SoldierOfGod1/command-centre/internal/skills"
 	"github.com/SoldierOfGod1/command-centre/internal/store"
 	"github.com/SoldierOfGod1/command-centre/internal/sync"
@@ -29,10 +34,20 @@ type API struct {
 	Bus         *event.Bus
 	Hub         *ws.Hub
 	QueueMgr    *chat.QueueManager
+	// Phase A3 — hybrid agent dispatcher. Optional: nil means
+	// /api/v1/chat/agent returns 503 and the existing /chat
+	// path is the only entry. Wire from main.go via
+	// chat.NewDispatcherFromEnv after building the catalogue.
+	Dispatcher  *chat.Dispatcher
 	ClickUp     config.ClickUpConfig
 	SyncEngine  *sync.Engine
 	CustomerMgr *customer.Manager
 	MCPHealth   *skills.HealthMonitor
+	PlatformMon *platforms.Monitor
+	DBHealth    *platforms.DBMonitor
+	Runner      *runner.Manager
+	SalesPoller *sales.Poller
+	Feed        *event.Publisher // activity feed writer; may be nil in tests
 	StartTime   time.Time
 }
 
@@ -93,7 +108,9 @@ func NewRouter(api *API, hub *ws.Hub, staticDir string) http.Handler {
 	mux.HandleFunc("POST /api/v1/projects", api.handleCreateProject)
 	mux.HandleFunc("GET /api/v1/projects/{id}", api.handleGetProject)
 	mux.HandleFunc("PUT /api/v1/projects/{id}", api.handleUpdateProject)
+	mux.HandleFunc("DELETE /api/v1/projects/{id}", api.handleDeleteProject)
 	mux.HandleFunc("POST /api/v1/projects/sync", api.handleSyncProjects)
+	mux.HandleFunc("GET /api/v1/projects/sync/status", api.handleSyncStatus)
 
 	// App-level settings (read/write from Settings page)
 	mux.HandleFunc("GET /api/v1/settings", api.handleGetSettings)
@@ -139,6 +156,18 @@ func NewRouter(api *API, hub *ws.Hub, staticDir string) http.Handler {
 	// Loop Operator — list/pause/kill active chat queue workers
 	RegisterLoopsRoutes(mux, api)
 
+	// Platform Monitor — rain BSS middleware + satellite apps up/down
+	RegisterPlatformsRoutes(mux, api)
+
+	// Axiom schema explorer + Snowflake-middleware correlation map
+	RegisterAxiomRoutes(mux, api)
+
+	// Projects Runner — start/stop local dev servers from the Projects page
+	RegisterProjectsRunnerRoutes(mux, api)
+
+	// rain Sales — background-polled dashboard snapshot
+	RegisterSalesRoutes(mux, api)
+
 	// Static files (frontend) with SPA fallback for React Router
 	mux.HandleFunc("/", spaHandler(staticDir))
 
@@ -176,16 +205,118 @@ func (a *API) handleHealth(w http.ResponseWriter, r *http.Request) {
 	jsonOK(w, map[string]any{"status": "healthy", "version": "1.0.0", "uptime_seconds": uptime})
 }
 
+// handleHealthReady probes every critical dependency and returns 503
+// if ANY of them is degraded. Previously it only pinged the SQLite
+// handle — that missed sales poller stalls, MCP crashes, and
+// platform-monitor outages. The new probe walks:
+//   1. SQLite         — DB.Ping (still)
+//   2. Sales poller   — last snapshot within 2× interval
+//   3. Platform mon   — at least one service status cached
+//   4. DB monitor     — at least one DB snapshot cached
+// Each check reports its own key so curl output tells you exactly
+// what's broken.
 func (a *API) handleHealthReady(w http.ResponseWriter, r *http.Request) {
+	checks := map[string]string{}
+	ready := true
+
 	if err := a.DB.Ping(); err != nil {
-		jsonError(w, 503, "database not ready")
+		checks["sqlite"] = "down: " + err.Error()
+		ready = false
+	} else {
+		checks["sqlite"] = "ok"
+	}
+
+	// Sales poller: degraded if last snapshot is older than 2× interval (30 min)
+	if a.SalesPoller != nil {
+		snap := a.SalesPoller.Snapshot()
+		if snap == nil || snap.AsOf.IsZero() {
+			checks["sales_poller"] = "no snapshot yet"
+		} else if time.Since(snap.AsOf) > 30*time.Minute {
+			checks["sales_poller"] = "stale: last poll " + time.Since(snap.AsOf).Round(time.Second).String() + " ago"
+			ready = false
+		} else {
+			checks["sales_poller"] = "ok"
+		}
+	}
+
+	if a.PlatformMon != nil {
+		pl := a.PlatformMon.Snapshot()
+		if len(pl) == 0 {
+			checks["platform_monitor"] = "no data"
+		} else {
+			checks["platform_monitor"] = "ok"
+		}
+	}
+
+	if a.DBHealth != nil {
+		dbSnap := a.DBHealth.Snapshot()
+		checks["db_monitor"] = "ok"
+		_ = dbSnap
+	}
+
+	payload := map[string]any{"status": "ready", "checks": checks}
+	if !ready {
+		payload["status"] = "degraded"
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusServiceUnavailable)
+		_ = writeJSON(w, payload)
 		return
 	}
-	jsonOK(w, map[string]string{"status": "ready"})
+	// Happy path uses the standard envelope ({"success":true,"data":…}).
+	jsonOK(w, payload)
+}
+
+// heartbeat is updated every 5s by a goroutine started in main.go.
+// handleHealthLive returns 503 when the heartbeat is > 30s stale —
+// a proxy for "main loop is deadlocked". An always-200 liveness
+// endpoint (the previous behaviour) fails silently in that scenario.
+var heartbeatNanos atomic.Int64
+
+// Heartbeat returns a ticker goroutine that flips heartbeatNanos
+// every 5s. Call once from main.go.
+func Heartbeat(ctx context.Context) {
+	heartbeatNanos.Store(time.Now().UnixNano())
+	go func() {
+		t := time.NewTicker(5 * time.Second)
+		defer t.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-t.C:
+				heartbeatNanos.Store(time.Now().UnixNano())
+			}
+		}
+	}()
 }
 
 func (a *API) handleHealthLive(w http.ResponseWriter, r *http.Request) {
-	jsonOK(w, map[string]string{"status": "live"})
+	last := heartbeatNanos.Load()
+	if last == 0 {
+		// Heartbeat not started yet — don't fail, just note it.
+		jsonOK(w, map[string]string{"status": "live", "heartbeat": "unset"})
+		return
+	}
+	age := time.Since(time.Unix(0, last))
+	if age > 30*time.Second {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusServiceUnavailable)
+		_ = writeJSON(w, map[string]any{"status": "stalled", "heartbeat_age_s": int(age.Seconds())})
+		return
+	}
+	jsonOK(w, map[string]any{"status": "live", "heartbeat_age_s": int(age.Seconds())})
+}
+
+// writeJSON is a minimal inline helper for 503 paths where we want
+// the standard envelope shape but jsonOK is wrong (it always writes
+// 200 status before serialising).
+func writeJSON(w http.ResponseWriter, v any) error {
+	b, err := json.Marshal(map[string]any{"success": false, "error": v})
+	if err != nil {
+		return err
+	}
+	_, err = w.Write(b)
+	return err
 }
 
 func (a *API) handleHealthMetrics(w http.ResponseWriter, r *http.Request) {
@@ -325,6 +456,9 @@ func (a *API) handleCreateTask(w http.ResponseWriter, r *http.Request) {
 	a.DB.Exec("INSERT INTO tasks (id,title,agent_id,priority,col,created_at,updated_at) VALUES (?,?,?,?,?,?,?)",
 		id, body.Title, body.Agent, body.Priority, body.Column, now, now)
 	a.Bus.PublishJSON("task.update", map[string]string{"id": id, "action": "created"})
+	if a.Feed != nil {
+		a.Feed.Publish(r.Context(), event.FeedKindTask, body.Agent, "Task created: "+body.Title)
+	}
 	jsonOK(w, map[string]string{"id": id})
 }
 
@@ -576,18 +710,47 @@ func (a *API) handleGetCosts(w http.ResponseWriter, r *http.Request) {
 // ── Security ──────────────────────────────────────────────
 
 func (a *API) handleGetSecurity(w http.ResponseWriter, r *http.Request) {
-	var ts, critical, warning, info, rules int
+	// Derive from the live monitoring tables instead of reading the
+	// dead security_state singleton (migrations reset it to zeros,
+	// nothing writes back). Formula mirrors the /service tab severity
+	// thresholds so the Dashboard number matches what the ops console
+	// shows — no two versions of truth.
+	//
+	//   trust_score = 100 - min(100, 25*p1 + 10*critical + 1*warning)
+	//
+	// lastScan is the wall-clock of the most-recent service_check row.
+	var p1, critical, warning, info int
+	if a.DB != nil {
+		_ = a.DB.QueryRow(`
+			SELECT
+			  SUM(CASE WHEN severity='p1'       AND state='open' THEN 1 ELSE 0 END),
+			  SUM(CASE WHEN severity='critical' AND state='open' THEN 1 ELSE 0 END),
+			  SUM(CASE WHEN severity='warning'  AND state='open' THEN 1 ELSE 0 END),
+			  SUM(CASE WHEN severity='info'     AND state='open' THEN 1 ELSE 0 END)
+			FROM service_alerts`).Scan(&p1, &critical, &warning, &info)
+	}
+	penalty := 25*p1 + 10*critical + 1*warning
+	if penalty > 100 {
+		penalty = 100
+	}
+	trust := 100 - penalty
+	// Rules-active = number of service checks persisted in the last
+	// 24h — proxy for "how much is actively being monitored". Zero
+	// when the platform monitor isn't running yet.
+	var rules int
 	var lastScan string
-	err := a.DB.QueryRow("SELECT trust_score,critical_count,warning_count,info_count,rules_active,last_scan FROM security_state WHERE id=1").
-		Scan(&ts, &critical, &warning, &info, &rules, &lastScan)
-	if err != nil {
-		// No row → return honest zeros rather than fabricated defaults.
-		jsonOK(w, map[string]any{"trustScore": 0, "critical": 0, "warning": 0, "info": 0, "rulesActive": 0, "lastScan": ""})
-		return
+	if a.DB != nil {
+		since := time.Now().Add(-24 * time.Hour).UTC().Format(time.RFC3339Nano)
+		_ = a.DB.QueryRow(`SELECT COUNT(DISTINCT service_id) FROM service_checks WHERE checked_at >= ?`, since).Scan(&rules)
+		_ = a.DB.QueryRow(`SELECT COALESCE(MAX(checked_at),'') FROM service_checks`).Scan(&lastScan)
 	}
 	jsonOK(w, map[string]any{
-		"trustScore": ts, "critical": critical, "warning": warning, "info": info,
-		"rulesActive": rules, "lastScan": lastScan,
+		"trustScore":  trust,
+		"critical":    critical + p1, // UI collapses P1 into critical count
+		"warning":     warning,
+		"info":        info,
+		"rulesActive": rules,
+		"lastScan":    lastScan,
 	})
 }
 
@@ -671,7 +834,8 @@ func (a *API) handleListProjects(w http.ResponseWriter, r *http.Request) {
 		SELECT id, name, description, status, priority, owner, progress_pct, created_at,
 		       COALESCE(local_path, ''), COALESCE(components, '[]'),
 		       COALESCE(has_frontend, 0), COALESCE(has_backend, 0),
-		       COALESCE(clickup_task_id, ''), COALESCE(clickup_last_sync, '')
+		       COALESCE(clickup_task_id, ''), COALESCE(clickup_last_sync, ''),
+		       COALESCE(sit_url, ''), COALESCE(prod_url, '')
 		FROM projects ORDER BY created_at DESC
 	`)
 	defer rows.Close()
@@ -679,9 +843,11 @@ func (a *API) handleListProjects(w http.ResponseWriter, r *http.Request) {
 	for rows.Next() {
 		var id, name, desc, status, priority, owner, created string
 		var localPath, componentsJSON, clickupTaskID, clickupLastSync string
+		var sitURL, prodURL string
 		var progress, hasFrontend, hasBackend int
 		rows.Scan(&id, &name, &desc, &status, &priority, &owner, &progress, &created,
-			&localPath, &componentsJSON, &hasFrontend, &hasBackend, &clickupTaskID, &clickupLastSync)
+			&localPath, &componentsJSON, &hasFrontend, &hasBackend, &clickupTaskID, &clickupLastSync,
+			&sitURL, &prodURL)
 		var components []map[string]string
 		_ = json.Unmarshal([]byte(componentsJSON), &components)
 		if components == nil {
@@ -702,6 +868,8 @@ func (a *API) handleListProjects(w http.ResponseWriter, r *http.Request) {
 			"hasBackend":      hasBackend == 1,
 			"clickupTaskId":   clickupTaskID,
 			"clickupLastSync": clickupLastSync,
+			"sitUrl":          sitURL,
+			"prodUrl":         prodURL,
 		}
 		if clickupTaskID != "" {
 			item["clickupUrl"] = "https://app.clickup.com/t/" + clickupTaskID
@@ -721,6 +889,9 @@ func (a *API) handleCreateProject(w http.ResponseWriter, r *http.Request) {
 		Priority    string `json:"priority"`
 		Owner       string `json:"owner"`
 		Status      string `json:"status"`
+		LocalPath   string `json:"localPath"`
+		SITURL      string `json:"sitUrl"`
+		ProdURL     string `json:"prodUrl"`
 	}
 	if err := readJSON(r, &body); err != nil {
 		jsonError(w, 400, "invalid json")
@@ -729,10 +900,16 @@ func (a *API) handleCreateProject(w http.ResponseWriter, r *http.Request) {
 	if body.Status == "" {
 		body.Status = "To Do"
 	}
+	if body.Priority == "" {
+		body.Priority = "normal"
+	}
 	id := "proj-" + time.Now().Format("20060102150405")
 	now := time.Now().Format(time.RFC3339)
-	a.DB.Exec("INSERT INTO projects (id,name,description,status,priority,owner,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?)",
-		id, body.Name, body.Description, body.Status, body.Priority, body.Owner, now, now)
+	a.DB.Exec(`INSERT INTO projects
+		(id,name,description,status,priority,owner,local_path,sit_url,prod_url,created_at,updated_at)
+		 VALUES (?,?,?,?,?,?,?,?,?,?,?)`,
+		id, body.Name, body.Description, body.Status, body.Priority, body.Owner,
+		body.LocalPath, body.SITURL, body.ProdURL, now, now)
 	a.Bus.PublishJSON("project.update", map[string]string{"id": id, "action": "created"})
 
 	// Mirror to ClickUp immediately so the task appears on the board.
@@ -749,9 +926,14 @@ func (a *API) handleCreateProject(w http.ResponseWriter, r *http.Request) {
 func (a *API) handleGetProject(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
 	var name, desc, status, priority, owner, created string
+	var localPath, sitURL, prodURL string
 	var progress int
-	err := a.DB.QueryRow("SELECT name,description,status,priority,owner,progress_pct,created_at FROM projects WHERE id=?", id).
-		Scan(&name, &desc, &status, &priority, &owner, &progress, &created)
+	err := a.DB.QueryRow(`
+		SELECT name, description, status, priority, owner, progress_pct, created_at,
+		       COALESCE(local_path,''), COALESCE(sit_url,''), COALESCE(prod_url,'')
+		  FROM projects WHERE id=?`, id).
+		Scan(&name, &desc, &status, &priority, &owner, &progress, &created,
+			&localPath, &sitURL, &prodURL)
 	if err != nil {
 		jsonError(w, 404, "project not found")
 		return
@@ -759,6 +941,7 @@ func (a *API) handleGetProject(w http.ResponseWriter, r *http.Request) {
 	jsonOK(w, map[string]any{
 		"id": id, "name": name, "description": desc, "status": status,
 		"priority": priority, "owner": owner, "progress": progress, "createdAt": created,
+		"localPath": localPath, "sitUrl": sitURL, "prodUrl": prodURL,
 	})
 }
 
@@ -782,6 +965,21 @@ func (a *API) handleUpdateProject(w http.ResponseWriter, r *http.Request) {
 	if pr, ok := body["priority"].(string); ok {
 		a.DB.Exec("UPDATE projects SET priority=?,updated_at=? WHERE id=?", pr, now, id)
 	}
+	if n, ok := body["name"].(string); ok {
+		a.DB.Exec("UPDATE projects SET name=?,updated_at=? WHERE id=?", n, now, id)
+	}
+	if o, ok := body["owner"].(string); ok {
+		a.DB.Exec("UPDATE projects SET owner=?,updated_at=? WHERE id=?", o, now, id)
+	}
+	if lp, ok := body["localPath"].(string); ok {
+		a.DB.Exec("UPDATE projects SET local_path=?,updated_at=? WHERE id=?", lp, now, id)
+	}
+	if su, ok := body["sitUrl"].(string); ok {
+		a.DB.Exec("UPDATE projects SET sit_url=?,updated_at=? WHERE id=?", su, now, id)
+	}
+	if pu, ok := body["prodUrl"].(string); ok {
+		a.DB.Exec("UPDATE projects SET prod_url=?,updated_at=? WHERE id=?", pu, now, id)
+	}
 	a.Bus.PublishJSON("project.update", map[string]string{"id": id, "action": "updated"})
 
 	// Push to ClickUp after the local write. Non-fatal — if it fails, the
@@ -795,19 +993,76 @@ func (a *API) handleUpdateProject(w http.ResponseWriter, r *http.Request) {
 	jsonOK(w, map[string]string{"id": id, "status": "updated"})
 }
 
-// handleSyncProjects runs a full push of every local project to ClickUp —
-// used by the "Sync now" button. Inbound pulls happen on the poller loop.
+// handleDeleteProject removes the local row AND its mirrored ClickUp
+// task (+ any cached subtasks). Delegates the cascade to the sync
+// engine so the two systems stay aligned.
+func (a *API) handleDeleteProject(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	if id == "" {
+		jsonError(w, 400, "id required")
+		return
+	}
+	if a.SyncEngine == nil {
+		// No engine — still drop the local row so the UI isn't lying.
+		_, _ = a.DB.Exec(`DELETE FROM pipelines WHERE project_id = ?`, id)
+		if _, err := a.DB.Exec(`DELETE FROM projects WHERE id = ?`, id); err != nil {
+			jsonError(w, 500, err.Error())
+			return
+		}
+		a.Bus.PublishJSON("project.delete", map[string]string{"id": id})
+		jsonOK(w, map[string]any{"id": id, "deleted": true})
+		return
+	}
+	if err := a.SyncEngine.DeleteProject(id); err != nil {
+		// Treat "not found" as a 404 so the UI can ignore stale refs.
+		if strings.Contains(err.Error(), "not found") {
+			jsonError(w, 404, err.Error())
+			return
+		}
+		jsonError(w, 500, err.Error())
+		return
+	}
+	a.Bus.PublishJSON("project.delete", map[string]string{"id": id})
+	jsonOK(w, map[string]any{"id": id, "deleted": true})
+}
+
+// handleSyncProjects kicks off a full push of every local project to
+// ClickUp asynchronously — the "Sync now" button returns immediately
+// and the work runs in a goroutine. Progress is readable via
+// GET /api/v1/projects/sync/status. Inbound pulls happen on the
+// poller loop.
 func (a *API) handleSyncProjects(w http.ResponseWriter, r *http.Request) {
 	if a.SyncEngine == nil {
 		jsonError(w, 503, "sync engine not initialised")
 		return
 	}
-	pushed, skipped, err := a.SyncEngine.PushAll()
-	if err != nil {
-		jsonError(w, 502, err.Error())
+	// Don't double-run. If one is already in flight, report back.
+	if state := a.SyncEngine.Status(); state.InProgress {
+		jsonOK(w, map[string]any{
+			"started":        false,
+			"already_running": true,
+			"status":         state,
+		})
 		return
 	}
-	jsonOK(w, map[string]int{"pushed": pushed, "skipped": skipped})
+	a.SyncEngine.StartAsyncPushAll()
+	// 202 Accepted — work is queued, caller should poll /status.
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusAccepted)
+	_ = json.NewEncoder(w).Encode(map[string]any{
+		"success": true,
+		"data":    map[string]any{"started": true, "status": a.SyncEngine.Status()},
+	})
+}
+
+// handleSyncStatus returns the current (or last-completed) sync run's
+// progress so the frontend can poll it without a long-held POST.
+func (a *API) handleSyncStatus(w http.ResponseWriter, r *http.Request) {
+	if a.SyncEngine == nil {
+		jsonError(w, 503, "sync engine not initialised")
+		return
+	}
+	jsonOK(w, a.SyncEngine.Status())
 }
 
 // ── Pipelines ─────────────────────────────────────────────

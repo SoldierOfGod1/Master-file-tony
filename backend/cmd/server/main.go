@@ -98,6 +98,18 @@ func main() {
 	executor := chat.NewExecutorWithDB(log, bus, db.DB)
 	queueMgr := chat.NewQueueManager(executor, db.DB, log)
 
+	// Phase A3 — hybrid agent dispatcher. Wraps the CLI executor
+	// with a tool-use loop that runs against /api/v1 endpoints
+	// when ANTHROPIC_API_KEY is set. No key => CLI handles
+	// everything (existing behaviour). Tool catalogue calls back
+	// through the local server, so audit + role gates apply
+	// uniformly to both human-driven and agent-driven actions.
+	agentBaseURL := strings.TrimSpace(os.Getenv("RAIN_API_BASE_URL"))
+	if agentBaseURL == "" {
+		agentBaseURL = "http://127.0.0.1:8080/api/v1"
+	}
+	dispatcher := chat.NewDispatcherFromEnv(log, bus, executor, agentBaseURL)
+
 	// Customer 360 — pgx pool manager for Axiom lookups.
 	customerMgr := customer.NewManager(db)
 	defer customerMgr.Close()
@@ -222,6 +234,7 @@ func main() {
 		Bus:         bus,
 		Hub:         hub,
 		QueueMgr:    queueMgr,
+		Dispatcher:  dispatcher,
 		ClickUp:     cfg.ClickUp,
 		SyncEngine:  syncEngine,
 		CustomerMgr: customerMgr,

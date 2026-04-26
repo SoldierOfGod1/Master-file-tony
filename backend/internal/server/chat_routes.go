@@ -34,6 +34,12 @@ func RegisterChatRoutes(mux *http.ServeMux, api *API) {
 	// See backend/internal/chat/intent.go for the rules.
 	mux.HandleFunc("POST /api/v1/chat/classify", api.handleClassifyIntent)
 
+	// Phase A3 — hybrid agent route. Goes through the dispatcher
+	// which picks API path (tool-use loop) vs CLI path based on
+	// the classifier output + agent availability. Falls back to
+	// the existing /chat behaviour when no API key configured.
+	mux.HandleFunc("POST /api/v1/chat/agent", api.handleChatAgent)
+
 	// Chat config
 	mux.HandleFunc("GET /api/v1/chat/config", api.handleGetChatConfig)
 	mux.HandleFunc("PUT /api/v1/chat/config", api.handleUpdateChatConfig)
@@ -52,6 +58,49 @@ func (a *API) handleClassifyIntent(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	jsonOK(w, chat.ClassifyIntent(body.Prompt))
+}
+
+// handleChatAgent runs the Phase A3 dispatcher: classifier picks
+// API tool-use loop or CLI subprocess, both stream into the same
+// event bus. Returns the final answer text. Falls back to 503 if
+// the dispatcher isn't wired (env not configured).
+func (a *API) handleChatAgent(w http.ResponseWriter, r *http.Request) {
+	if a.Dispatcher == nil {
+		jsonError(w, 503, "agent dispatcher not configured (set ANTHROPIC_API_KEY to enable)")
+		return
+	}
+	var body struct {
+		ConversationID string `json:"conversationId"`
+		Message        string `json:"message"`
+		PIN            string `json:"pin"`
+		ProjectDir     string `json:"projectDir"`
+	}
+	if err := readJSON(r, &body); err != nil {
+		jsonError(w, 400, "invalid json")
+		return
+	}
+	if body.ConversationID == "" || body.Message == "" {
+		jsonError(w, 400, "conversationId and message are required")
+		return
+	}
+	hasPIN := false
+	if body.PIN != "" {
+		var pinHash string
+		if err := a.DB.QueryRow("SELECT pin_hash FROM chat_config WHERE id = 1").Scan(&pinHash); err == nil && pinHash != "" {
+			hasPIN = chat.VerifyPIN(body.PIN, pinHash)
+		}
+	}
+	resp, err := a.Dispatcher.Dispatch(r.Context(), chat.ExecuteRequest{
+		ConversationID: body.ConversationID,
+		Prompt:         body.Message,
+		ProjectDir:     body.ProjectDir,
+		HasPIN:         hasPIN,
+	})
+	if err != nil {
+		jsonError(w, 500, fmt.Sprintf("agent dispatch failed: %v", err))
+		return
+	}
+	jsonOK(w, map[string]any{"response": resp})
 }
 
 // ── Conversations ────────────────────────────────────────
