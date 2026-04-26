@@ -36,3 +36,7 @@ Thumbs.db
 
 # Per-persona git worktrees (#7 — Loop Operator isolation)
 .worktrees/
+
+# Claude Code local artefacts (audit logs, scheduler lock)
+.claude/logs/
+.claude/scheduled_tasks.lock

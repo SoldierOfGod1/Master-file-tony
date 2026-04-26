@@ -65,3 +65,42 @@ MCP servers are declared in `.mcp.json` at project root. See `.claude/rules/mcp-
 | 4 | Database Schema | 05, 11 | `database/`, `schema/` |
 | 5 | API Contract | 04, 09, 01 | `.claude/spec/03-apis/api-design.yaml` |
 | 6 | Deployment Workflow | 06, 03, 12 | `docker/`, `kubernetes/`, CI/CD |
+
+---
+
+## Skills: rain-first, gstack for product pipeline
+
+This repo has **two skill layers**. Pick by domain, not by habit.
+
+### rain/Axiom work — ALWAYS use rain-specific tooling first
+
+Anything touching rain BSS, Axiom, Snowflake middleware, customer/billing/payment data:
+
+- **Axiom Explorer** at `/axiom` (backend `/api/v1/axiom/*`) is the source of truth. Cross-DB joins walk per-domain databases (`party`, `account`, `customer`, `product`, `service`, `resource`, `snowflake`, …).
+- Local catalogues: `docs/axiom/axiom-prod-catalogue.json`, `docs/axiom/axiom-prod-columns.json`, `docs/axiom/axiom-prod-summary.md`. Regenerate with `python scripts/crawl-axiom.py`.
+- **Writes route through Snowflake middleware** — NEVER UPDATE/INSERT/DELETE directly on Axiom tables. Every `/api/v1/axiom/*` endpoint is read-only with PII redaction baked in.
+- Memory: the `reference_axiom_prod.md` memory records confirmed table paths, cross-DB join keys, and the 83-row endpoint→Axiom map in `backend/internal/axiom/correlate.go`.
+
+### Everything else — gstack pipeline
+
+`gstack` (Garry Tan, MIT, `~/.claude/skills/gstack/`) provides the product/process pipeline. Skills chain via design docs: each skill writes an artefact the next reads.
+
+**Pipeline**: `Think → Plan → Build → Review → Test → Ship → Reflect`
+
+| Phase | Use |
+|---|---|
+| Think | `/office-hours` (6-question YC interrogation → design doc) |
+| Plan | `/autoplan` or `/plan-ceo-review` → `/plan-eng-review` → `/plan-design-review` → `/plan-devex-review` |
+| Design | `/design-consultation` (greenfield), `/design-shotgun` (variants), `/design-html` (production HTML) |
+| Build | Direct work, honouring frozen scope via `/freeze` + `/guard` + `/careful` |
+| Review | `/review` (staff engineer), `/cso` (OWASP+STRIDE, 8/10 confidence gate, exploit scenarios) |
+| Debug | `/investigate` (Iron Law: no fixes without root cause, 3-failed-fix stop) |
+| Test | `/qa` (real browser + atomic fix commits + auto-regression tests), `/qa-only` (report only), `/benchmark` (Web Vitals baseline) |
+| Ship | `/ship` (sync, test, push, PR), `/land-and-deploy` (merge → CI → deploy → verify), `/canary` (post-deploy monitoring loop) |
+| Reflect | `/retro` (weekly), `/document-release` (release notes), `/learn` |
+
+**Precedence**: when a gstack skill and a rain-specific tool could both apply to rain/BSS work, the rain tool wins. When no rain tool exists (anything product, process, design, deploy, retro), use gstack.
+
+### Upgrading gstack
+
+`~/.claude/skills/gstack/bin/gstack-update-check` runs on skill invocation (throttled, failure-safe). Manual upgrade: `/gstack-upgrade`.
