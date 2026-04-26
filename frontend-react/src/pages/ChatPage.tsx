@@ -29,7 +29,7 @@ import {
   getConversation,
   exportConversation,
 } from '../api/conversations';
-import { sendMessage } from '../api/chat';
+import { sendMessage, getConversationUsage } from '../api/chat';
 import LoopOperatorPanel from './LoopOperatorPanel';
 import ContextGauge, { CompactBanner, estimateMessagesPct } from './ContextGauge';
 import styles from './ChatPage.module.css';
@@ -43,6 +43,95 @@ const PROJECT_DIRS: readonly string[] = [
   '~/projects/infra',
   '~/projects/ml',
 ] as const;
+
+/* ----- Phase C3 onboarding cards ----------------------------
+   Shown when the conversation is empty. Lowers the barrier for new
+   ops users staring at a blank textarea — clicking a card prefills
+   the prompt so the user can refine and send. Each card is one of
+   the four high-frequency rain ops asks. The intent classifier in
+   Phase A1 will route the resulting prompt; the dispatcher in
+   Phase A3 picks API or CLI path. */
+const ONBOARDING_PROMPTS: ReadonlyArray<{
+  readonly label: string;
+  readonly hint: string;
+  readonly prompt: string;
+}> = [
+  {
+    label: 'Look up a customer',
+    hint: 'Customer 360 + cascade + audit trail',
+    prompt: 'Look up baptista.manuel@rain.co.za',
+  },
+  {
+    label: 'Why was a payment declined?',
+    hint: 'Cross-references payment, cdr, communications',
+    prompt: 'Why did the last payment for ',
+  },
+  {
+    label: 'Check platform health',
+    hint: 'Axiom, GaussDB, satellite apps + open incidents',
+    prompt: 'Is everything up right now?',
+  },
+  {
+    label: 'Find a SIM by IMSI',
+    hint: 'Walks the cascade, surfaces override + swap state',
+    prompt: 'Trace IMSI 655',
+  },
+];
+
+function OnboardingCards({ onPick }: { readonly onPick: (prompt: string) => void }) {
+  return (
+    <div
+      style={{
+        display: 'grid',
+        gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))',
+        gap: 10,
+        padding: 16,
+        marginTop: 24,
+      }}
+    >
+      <div style={{ gridColumn: '1 / -1', textAlign: 'center', marginBottom: 8 }}>
+        <div style={{ fontSize: 13, opacity: 0.85, fontFamily: 'var(--font-mono, monospace)' }}>
+          Soldier of God · ops agent
+        </div>
+        <div style={{ fontSize: 11, opacity: 0.55, marginTop: 2 }}>
+          Pick a starter or ask anything
+        </div>
+      </div>
+      {ONBOARDING_PROMPTS.map((c) => (
+        <button
+          key={c.label}
+          type="button"
+          onClick={() => onPick(c.prompt)}
+          style={{
+            display: 'flex',
+            flexDirection: 'column',
+            alignItems: 'flex-start',
+            gap: 4,
+            padding: '12px 14px',
+            background: 'rgba(0, 240, 255, 0.04)',
+            border: '1px solid rgba(0, 240, 255, 0.22)',
+            borderRadius: 6,
+            color: 'inherit',
+            cursor: 'pointer',
+            textAlign: 'left',
+            fontFamily: 'var(--font-mono, monospace)',
+          }}
+          onMouseEnter={(e) => {
+            (e.currentTarget as HTMLButtonElement).style.background = 'rgba(0, 240, 255, 0.12)';
+          }}
+          onMouseLeave={(e) => {
+            (e.currentTarget as HTMLButtonElement).style.background = 'rgba(0, 240, 255, 0.04)';
+          }}
+        >
+          <div style={{ fontSize: 12, color: '#00f0ff', letterSpacing: '0.04em' }}>
+            {c.label}
+          </div>
+          <div style={{ fontSize: 10, opacity: 0.7 }}>{c.hint}</div>
+        </button>
+      ))}
+    </div>
+  );
+}
 
 /* ----- WebSocket chat event shapes ----- */
 
@@ -213,6 +302,11 @@ export default function ChatPage() {
   const [activeConvId, setActiveConvId] = useState<string | null>(null);
   const [messages, setMessages] = useState<DisplayMessage[]>([]);
 
+  // Real token total for the active conversation. Re-fetched when the
+  // active convo changes and after every assistant response completes.
+  const [realTokens, setRealTokens] = useState<number | undefined>(undefined);
+  const [modelHint, setModelHint] = useState<string | undefined>(undefined);
+
   // Input
   const [inputText, setInputText] = useState('');
   const [projectDir, setProjectDir] = useState(PROJECT_DIRS[0]);
@@ -274,11 +368,31 @@ export default function ChatPage() {
     setMessages([]);
     setIsWaiting(false);
     setIsStreaming(false);
+    setRealTokens(undefined);
+    setModelHint(undefined);
 
     const data = await getConversation(id);
     if (data) {
       setMessages(data.messages.map(toDisplayMessage));
     }
+
+    // Pull the real token total from cost_records for this convo.
+    const usage = await getConversationUsage(id);
+    if (usage) {
+      setRealTokens(usage.total_tokens);
+      setModelHint(usage.model);
+    }
+  }, []);
+
+  // Refresh usage after every assistant response completes so the gauge
+  // stays accurate without needing a manual reload.
+  const refreshUsage = useCallback(async () => {
+    const id = activeConvIdRef.current;
+    if (!id) return;
+    const usage = await getConversationUsage(id);
+    if (!usage) return;
+    setRealTokens(usage.total_tokens);
+    if (usage.model) setModelHint(usage.model);
   }, []);
 
   /* ----- WebSocket listener for chat events ----- */
@@ -386,6 +500,10 @@ export default function ChatPage() {
             } else if (envelope.type === 'chat.complete') {
               setIsWaiting(false);
               setIsStreaming(false);
+              // Pull the updated token total from cost_records. A small
+              // delay lets the backend finish writing the row before we
+              // query it.
+              setTimeout(() => { void refreshUsage(); }, 400);
 
               const streamingId = streamingIdRef.current;
               streamingIdRef.current = -1;
@@ -749,7 +867,11 @@ export default function ChatPage() {
                 {activeConv.title}
               </span>
               <div className={styles.chatHeaderActions}>
-                <ContextGauge messages={messages} />
+                <ContextGauge
+                  messages={messages}
+                  realTokens={realTokens}
+                  modelHint={modelHint}
+                />
                 <button
                   type="button"
                   className={styles.iconBtn}
@@ -760,10 +882,19 @@ export default function ChatPage() {
                 </button>
               </div>
             </div>
-            <CompactBanner pct={estimateMessagesPct(messages)} />
+            <CompactBanner
+              pct={
+                typeof realTokens === 'number' && realTokens > 0
+                  ? Math.min(100, Math.round((realTokens / 200_000) * 100))
+                  : estimateMessagesPct(messages, modelHint)
+              }
+            />
 
             {/* Messages */}
             <div className={styles.messagesContainer}>
+              {messages.length === 0 && !isWaiting && !isStreaming && (
+                <OnboardingCards onPick={(p) => setInputText(p)} />
+              )}
               {messages.map((msg) => (
                 <MessageBubble key={msg.id} msg={msg} />
               ))}
