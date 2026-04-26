@@ -11,6 +11,19 @@ import (
 	"time"
 )
 
+// approvalPoll is the dispatcher hook that polls an approval row
+// after the agent calls approval_create. Phase B2 follow-up: when
+// set, the agent loop blocks on the new approval id for up to
+// PollTimeout, then injects the resolved status into the
+// tool_result content so the model can react in the same loop.
+//
+// Returning ("", false) means "no resolution within window" and
+// the loop reports pending; the user can approve later and
+// re-run. Returning ("approved" | "rejected", true) means a human
+// touched it — the model decides what to do next based on the
+// status string.
+type approvalPoll func(ctx context.Context, approvalID string) (status string, resolved bool)
+
 // AgentClient runs a tool-use loop against Anthropic's Messages
 // API. Phase A3 of the agent-orchestrator plan: this is the
 // non-CLI path that handles ops-type prompts (customer lookups,
@@ -46,7 +59,16 @@ type AgentClient struct {
 	// ops chain (lookup customer → check payments → check sims →
 	// check incidents) with headroom.
 	MaxTurns int
+
+	// pollApproval is set by the dispatcher when wiring this
+	// client; nil means "no polling, just return the create
+	// result as-is." See approvalPoll docs above.
+	pollApproval approvalPoll
 }
+
+// SetApprovalPoll wires the polling hook. Called once by the
+// dispatcher at construction; not thread-safe to change later.
+func (a *AgentClient) SetApprovalPoll(p approvalPoll) { a.pollApproval = p }
 
 // AgentConfig builds an AgentClient. APIKey + Model are required;
 // BaseURL defaults to api.anthropic.com.
@@ -243,6 +265,29 @@ func (a *AgentClient) Run(ctx context.Context, opts AgentRunOptions) (string, []
 				rawInput = injectRequester(rawInput, opts.UserID)
 			}
 			out, err := tool.Run(ctx, rawInput)
+			// Phase B2 follow-up — approval-state polling. If the
+			// approval_create call succeeded and we have a polling
+			// hook wired, block on the resolution for up to
+			// pollApproval's timeout so the model can react in the
+			// same loop. Without this the model just sees "approval
+			// created, pending" and tells the user to retry — the
+			// poll closes that loop end-to-end.
+			if err == nil && tu.Name == "approval_create" && a.pollApproval != nil {
+				if asMap, ok := out.(map[string]any); ok {
+					if rawID, has := asMap["id"]; has {
+						approvalID := fmt.Sprintf("%v", rawID)
+						status, resolved := a.pollApproval(ctx, approvalID)
+						if resolved {
+							asMap["polled_status"] = status
+							asMap["resolved"] = true
+						} else {
+							asMap["polled_status"] = "pending"
+							asMap["resolved"] = false
+						}
+						out = asMap
+					}
+				}
+			}
 			if err != nil {
 				errStr := err.Error()
 				resTurn := AgentTurn{Kind: "tool_result", ToolName: tu.Name, ToolResult: out, Error: errStr, At: time.Now()}

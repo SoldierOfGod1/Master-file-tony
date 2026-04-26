@@ -88,6 +88,14 @@ func NewDispatcher(cfg DispatcherConfig) *Dispatcher {
 			BaseURL:   cfg.APIBaseURL,
 			Catalogue: cfg.Catalogue,
 		})
+		// Phase B2 follow-up — wire the approval-state poller so
+		// the agent loop can wait on a human approving the action
+		// it just registered. Polls the SQLite approvals table
+		// every 2s for up to 60s. Without DB the poller is nil
+		// and the loop returns pending immediately.
+		if cfg.DB != nil {
+			d.agent.SetApprovalPoll(buildApprovalPoll(cfg.DB, cfg.Logger))
+		}
 		if cfg.Logger != nil {
 			cfg.Logger.Info("chat dispatcher: agent path enabled",
 				"model", d.agent.model, "tools", len(cfg.Catalogue.All()))
