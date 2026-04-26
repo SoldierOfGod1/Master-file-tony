@@ -61,6 +61,29 @@ export async function getConversationActive(
   );
 }
 
+/* Phase C1 follow-up — stream replay.
+   Returns the buffered chat.stream / chat.complete / chat.error
+   payloads (oldest first) the server kept in memory while the
+   client was offline. Each entry has its own `type` field so the
+   caller can route it through the same handler used for live
+   WebSocket events. Empty array if the buffer is empty or the
+   conversation has been Forgotten (which happens on completion). */
+export interface ReplayChatEvent {
+  readonly conversationId: string;
+  readonly type: 'stream' | 'complete' | 'error';
+  readonly content: string;
+  readonly metadata?: Record<string, unknown>;
+}
+
+export async function getConversationReplay(
+  id: string,
+): Promise<ReplayChatEvent[]> {
+  const data = await apiGet<ReplayChatEvent[]>(
+    `/conversations/${encodeURIComponent(id)}/replay`,
+  );
+  return data ?? [];
+}
+
 export async function exportConversation(id: string): Promise<string | null> {
   const url = `/api/v1/conversations/${encodeURIComponent(id)}/export?format=md`;
 

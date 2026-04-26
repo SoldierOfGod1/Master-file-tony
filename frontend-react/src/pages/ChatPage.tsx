@@ -29,6 +29,7 @@ import {
   getConversation,
   exportConversation,
   getConversationActive,
+  getConversationReplay,
 } from '../api/conversations';
 import { sendMessage, getConversationUsage } from '../api/chat';
 import LoopOperatorPanel from './LoopOperatorPanel';
@@ -540,22 +541,42 @@ export default function ChatPage() {
     setIsStreaming(false);
     setRealTokens(undefined);
     setResumeInfo(null);
-    // Phase C1 — probe streaming status. If the agent is still
-    // working on a previous prompt we render an indicator so the
-    // user knows new chunks will continue arriving.
-    void getConversationActive(id).then((s) => {
-      if (s?.streaming && s.info) {
-        setResumeInfo({ path: s.info.path, startedAt: s.info.started_at });
-        setIsStreaming(true);
-      } else {
-        setResumeInfo(null);
-      }
-    });
     setModelHint(undefined);
+    // Reset the per-stream id ref so replayed chunks aggregate into a
+    // fresh streaming bubble (and any subsequent live chunk continues
+    // appending to the same one). Without this reset a previous
+    // conversation's id would linger and the chunk-merge guard would
+    // treat replayed chunks as a stale stream.
+    streamingIdRef.current = -1;
 
-    const data = await getConversation(id);
+    // Order matters: load persisted messages FIRST so the DB
+    // state is in place, THEN apply replay chunks on top. If the DB
+    // load fired after replay, setMessages(dbMessages) would wipe
+    // the streaming bubble built from buffered chunks.
+    const [active, data] = await Promise.all([
+      getConversationActive(id),
+      getConversation(id),
+    ]);
+
     if (data) {
       setMessages(data.messages.map(toDisplayMessage));
+    }
+
+    // Phase C1 — resume indicator + Phase C1 follow-up replay.
+    if (active?.streaming && active.info) {
+      setResumeInfo({ path: active.info.path, startedAt: active.info.started_at });
+      setIsStreaming(true);
+      const buffered = await getConversationReplay(id);
+      // activeConvIdRef gate inside applyChatPayload protects against
+      // a stale switch landing replay events into the wrong conv.
+      for (const ev of buffered) {
+        applyChatPayloadRef.current({
+          conversationId: ev.conversationId,
+          type: ev.type,
+          content: ev.content,
+          metadata: ev.metadata,
+        });
+      }
     }
 
     // Pull the real token total from cost_records for this convo.
@@ -577,23 +598,184 @@ export default function ChatPage() {
     if (usage.model) setModelHint(usage.model);
   }, []);
 
+  /* ----- Shared chat-event handler ----------------------------------
+     Both the live WebSocket and the /replay buffer feed payloads
+     through this. `payload.type` switches between stream/complete/
+     error — same shape the backend bus emits. Stable identity via
+     useCallback so the WS effect doesn't re-subscribe. */
+  const applyChatPayload = useCallback(
+    (payload: ChatStreamPayload) => {
+      // Read active conv id from ref — do NOT nest state updates inside
+      // setState's updater function. React StrictMode invokes updaters
+      // twice to detect impure side effects; nested setMessages / ref
+      // mutations would then fire twice, causing duplicated content
+      // and spurious extra bubbles.
+      if (payload.conversationId !== activeConvIdRef.current) return;
+
+      if (payload.type === 'stream') {
+        setIsWaiting(false);
+        setIsStreaming(true);
+
+        // Pre-compute a new id if we might need it. Assign to the ref
+        // BEFORE calling setMessages so React's StrictMode double-invoke
+        // of the updater is idempotent (ref mutation happens exactly
+        // once, deterministically).
+        let newId = streamingIdRef.current;
+        if (newId < 0) {
+          newId = Date.now();
+          streamingIdRef.current = newId;
+        }
+        const createdAt = new Date().toISOString();
+
+        // Phase C2 — extract agent_turn metadata if present so
+        // the audit pane can render the structured tool trail.
+        const turnFromMeta = (() => {
+          const m = payload.metadata as Record<string, unknown> | undefined;
+          if (!m || typeof m !== 'object') return undefined;
+          const t = (m as { agent_turn?: AgentTurn }).agent_turn;
+          if (!t || typeof t !== 'object') return undefined;
+          return t;
+        })();
+
+        setMessages((prev) => {
+          const idx = prev.findIndex(
+            (m) => m.id === newId && m.isStreaming,
+          );
+          if (idx >= 0) {
+            // Guard: StrictMode may invoke the updater twice with the
+            // same prev; on the second invocation we'd re-append the
+            // same chunk. Detect by checking if the tail already ends
+            // with this exact chunk. Also guards replay→live overlap
+            // when the buffered chunk and the live chunk arrive both.
+            const existing = prev[idx].content;
+            if (
+              payload.content !== '' &&
+              existing.endsWith(payload.content)
+            ) {
+              return prev;
+            }
+            const updated = [...prev];
+            const existingTurns = updated[idx].agentTurns ?? [];
+            const nextTurns = turnFromMeta
+              ? [...existingTurns, turnFromMeta]
+              : existingTurns;
+            updated[idx] = {
+              ...updated[idx],
+              content: existing + payload.content,
+              agentTurns: nextTurns,
+            };
+            return updated;
+          }
+          const streamMsg: DisplayMessage = {
+            id: newId,
+            conversationId: payload.conversationId,
+            role: 'assistant',
+            content: payload.content,
+            source: 'ui',
+            metadata: {},
+            createdAt,
+            isStreaming: true,
+            isError: false,
+            agentTurns: turnFromMeta ? [turnFromMeta] : undefined,
+          };
+          return [...prev, streamMsg];
+        });
+      } else if (payload.type === 'complete') {
+        setIsWaiting(false);
+        setIsStreaming(false);
+        // Pull the updated token total from cost_records. A small
+        // delay lets the backend finish writing the row before we
+        // query it.
+        setTimeout(() => { void refreshUsage(); }, 400);
+
+        const streamingId = streamingIdRef.current;
+        streamingIdRef.current = -1;
+
+        setMessages((prev) => {
+          const idx = prev.findIndex((m) => m.id === streamingId);
+          if (idx >= 0) {
+            const updated = [...prev];
+            updated[idx] = {
+              ...updated[idx],
+              content: payload.content,
+              metadata:
+                (payload.metadata as Record<string, unknown>) ?? {},
+              isStreaming: false,
+            };
+            return updated;
+          }
+          // Complete without prior stream — but guard against duplicates
+          // from StrictMode double-invocation: if last message matches,
+          // don't add a duplicate.
+          const last = prev[prev.length - 1];
+          if (
+            last &&
+            last.role === 'assistant' &&
+            last.content === payload.content &&
+            !last.isStreaming
+          ) {
+            return prev;
+          }
+          return [
+            ...prev,
+            {
+              id: Date.now(),
+              conversationId: payload.conversationId,
+              role: 'assistant',
+              content: payload.content,
+              source: 'ui',
+              metadata:
+                (payload.metadata as Record<string, unknown>) ?? {},
+              createdAt: new Date().toISOString(),
+              isStreaming: false,
+              isError: false,
+            },
+          ];
+        });
+      } else if (payload.type === 'error') {
+        setIsWaiting(false);
+        setIsStreaming(false);
+
+        const streamingId = streamingIdRef.current;
+        streamingIdRef.current = -1;
+
+        setMessages((prev) => {
+          // Remove any pending streaming message
+          const cleaned = prev.filter(
+            (m) => m.id !== streamingId || !m.isStreaming,
+          );
+          return [
+            ...cleaned,
+            {
+              id: Date.now(),
+              conversationId: payload.conversationId,
+              role: 'assistant',
+              content: payload.content,
+              source: 'ui',
+              metadata: {},
+              createdAt: new Date().toISOString(),
+              isStreaming: false,
+              isError: true,
+            },
+          ];
+        });
+      }
+    },
+    [refreshUsage],
+  );
+
   /* ----- WebSocket listener for chat events ----- */
 
+  // Hold the latest applyChatPayload in a ref so the WS effect can
+  // invoke it without re-subscribing whenever the callback identity
+  // changes (which it shouldn't with useCallback, but the ref also
+  // covers the replay-then-live race cleanly).
+  const applyChatPayloadRef = useRef(applyChatPayload);
   useEffect(() => {
-    // We rely on the global lastMessage from context being dispatched.
-    // However, the chat events are specific types not in the main switch.
-    // We need a direct approach here.
-  }, [state.gatewayStatus]);
+    applyChatPayloadRef.current = applyChatPayload;
+  }, [applyChatPayload]);
 
-  // Listen to raw WebSocket messages for chat events
-  // We tap into the shared WS via the context's last message
   useEffect(() => {
-    // The context handles WS and dispatches last message.
-    // Chat events come as type "chat.stream", "chat.complete", "chat.error"
-    // These fall into the default case of the context switch, which triggers refreshAll.
-    // We need to listen for them separately.
-    // For now we set up a secondary listener on the same endpoint.
-
     const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
     const wsUrl = `${protocol}//${window.location.host}/ws`;
     let ws: WebSocket | null = null;
@@ -619,162 +801,7 @@ export default function ChatPage() {
               return;
             }
 
-            const payload = envelope.payload as ChatStreamPayload;
-
-            // Read active conv id from ref — do NOT nest state updates inside
-            // setState's updater function. React StrictMode invokes updaters
-            // twice to detect impure side effects; nested setMessages / ref
-            // mutations would then fire twice, causing duplicated content
-            // and spurious extra bubbles.
-            if (payload.conversationId !== activeConvIdRef.current) return;
-
-            if (envelope.type === 'chat.stream') {
-              setIsWaiting(false);
-              setIsStreaming(true);
-
-              // Pre-compute a new id if we might need it. Assign to the ref
-              // BEFORE calling setMessages so React's StrictMode double-invoke
-              // of the updater is idempotent (ref mutation happens exactly
-              // once, deterministically).
-              let newId = streamingIdRef.current;
-              if (newId < 0) {
-                newId = Date.now();
-                streamingIdRef.current = newId;
-              }
-              const createdAt = new Date().toISOString();
-
-              // Phase C2 — extract agent_turn metadata if present so
-              // the audit pane can render the structured tool trail.
-              const turnFromMeta = (() => {
-                const m = payload.metadata as Record<string, unknown> | undefined;
-                if (!m || typeof m !== 'object') return undefined;
-                const t = (m as { agent_turn?: AgentTurn }).agent_turn;
-                if (!t || typeof t !== 'object') return undefined;
-                return t;
-              })();
-
-              setMessages((prev) => {
-                const idx = prev.findIndex(
-                  (m) => m.id === newId && m.isStreaming,
-                );
-                if (idx >= 0) {
-                  // Guard: StrictMode may invoke the updater twice with the
-                  // same prev; on the second invocation we'd re-append the
-                  // same chunk. Detect by checking if the tail already ends
-                  // with this exact chunk.
-                  const existing = prev[idx].content;
-                  if (
-                    payload.content !== '' &&
-                    existing.endsWith(payload.content)
-                  ) {
-                    return prev;
-                  }
-                  const updated = [...prev];
-                  const existingTurns = updated[idx].agentTurns ?? [];
-                  const nextTurns = turnFromMeta
-                    ? [...existingTurns, turnFromMeta]
-                    : existingTurns;
-                  updated[idx] = {
-                    ...updated[idx],
-                    content: existing + payload.content,
-                    agentTurns: nextTurns,
-                  };
-                  return updated;
-                }
-                const streamMsg: DisplayMessage = {
-                  id: newId,
-                  conversationId: payload.conversationId,
-                  role: 'assistant',
-                  content: payload.content,
-                  source: 'ui',
-                  metadata: {},
-                  createdAt,
-                  isStreaming: true,
-                  isError: false,
-                  agentTurns: turnFromMeta ? [turnFromMeta] : undefined,
-                };
-                return [...prev, streamMsg];
-              });
-            } else if (envelope.type === 'chat.complete') {
-              setIsWaiting(false);
-              setIsStreaming(false);
-              // Pull the updated token total from cost_records. A small
-              // delay lets the backend finish writing the row before we
-              // query it.
-              setTimeout(() => { void refreshUsage(); }, 400);
-
-              const streamingId = streamingIdRef.current;
-              streamingIdRef.current = -1;
-
-              setMessages((prev) => {
-                const idx = prev.findIndex((m) => m.id === streamingId);
-                if (idx >= 0) {
-                  const updated = [...prev];
-                  updated[idx] = {
-                    ...updated[idx],
-                    content: payload.content,
-                    metadata:
-                      (payload.metadata as Record<string, unknown>) ?? {},
-                    isStreaming: false,
-                  };
-                  return updated;
-                }
-                // Complete without prior stream — but guard against duplicates
-                // from StrictMode double-invocation: if last message matches,
-                // don't add a duplicate.
-                const last = prev[prev.length - 1];
-                if (
-                  last &&
-                  last.role === 'assistant' &&
-                  last.content === payload.content &&
-                  !last.isStreaming
-                ) {
-                  return prev;
-                }
-                return [
-                  ...prev,
-                  {
-                    id: Date.now(),
-                    conversationId: payload.conversationId,
-                    role: 'assistant',
-                    content: payload.content,
-                    source: 'ui',
-                    metadata:
-                      (payload.metadata as Record<string, unknown>) ?? {},
-                    createdAt: new Date().toISOString(),
-                    isStreaming: false,
-                    isError: false,
-                  },
-                ];
-              });
-            } else if (envelope.type === 'chat.error') {
-              setIsWaiting(false);
-              setIsStreaming(false);
-
-              const streamingId = streamingIdRef.current;
-              streamingIdRef.current = -1;
-
-              setMessages((prev) => {
-                // Remove any pending streaming message
-                const cleaned = prev.filter(
-                  (m) => m.id !== streamingId || !m.isStreaming,
-                );
-                return [
-                  ...cleaned,
-                  {
-                    id: Date.now(),
-                    conversationId: payload.conversationId,
-                    role: 'assistant',
-                    content: payload.content,
-                    source: 'ui',
-                    metadata: {},
-                    createdAt: new Date().toISOString(),
-                    isStreaming: false,
-                    isError: true,
-                  },
-                ];
-              });
-            }
+            applyChatPayloadRef.current(envelope.payload as ChatStreamPayload);
           } catch {
             // Ignore parse errors from non-chat messages
           }
