@@ -13,6 +13,7 @@ import hudStyles from '../theme/hud.module.css';
 import styles from './CostAnalyticsPage.module.css';
 import BudgetsTile from './BudgetsTile';
 import MemoryTile from './MemoryTile';
+import PatternsTile from './PatternsTile';
 
 function formatRand(value: number): string {
   if (value >= 1_000_000) return `R${(value / 1_000_000).toFixed(2)}M`;
@@ -122,6 +123,12 @@ export default function CostAnalyticsPage() {
           cross-session memory. Inspect / pin / scrub entries that
           steer every subsequent agent run for that user. */}
       <MemoryTile />
+
+      {/* D2 follow-up — cross-user pattern aggregate.
+          Privacy-safe ops telemetry (counts only, k-anon ≥3).
+          Originally deferred for InfoSec; now ships behind the
+          same RAIN_SUPPORT_L2 gate as memory edits. */}
+      <PatternsTile />
     </div>
   );
 }

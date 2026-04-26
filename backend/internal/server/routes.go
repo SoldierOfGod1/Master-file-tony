@@ -174,6 +174,7 @@ func NewRouter(api *API, hub *ws.Hub, staticDir string) http.Handler {
 	RegisterPlatformsRoutes(mux, api)
 	RegisterBudgetsRoutes(mux, api)
 	RegisterMemoryRoutes(mux, api)
+	RegisterPatternsRoutes(mux, api)
 
 	// Axiom schema explorer + Snowflake-middleware correlation map
 	RegisterAxiomRoutes(mux, api)
