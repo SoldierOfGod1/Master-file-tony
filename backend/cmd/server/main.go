@@ -108,7 +108,7 @@ func main() {
 	if agentBaseURL == "" {
 		agentBaseURL = "http://127.0.0.1:8080/api/v1"
 	}
-	dispatcher := chat.NewDispatcherFromEnv(log, bus, executor, agentBaseURL)
+	dispatcher := chat.NewDispatcherFromEnv(log, bus, executor, db.DB, agentBaseURL)
 
 	// Customer 360 — pgx pool manager for Axiom lookups.
 	customerMgr := customer.NewManager(db)

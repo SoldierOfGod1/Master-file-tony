@@ -396,4 +396,22 @@ var migrations = []string{
 	`CREATE INDEX IF NOT EXISTS idx_imsi_audit_individual_at ON imsi_lookup_audit(individual_id, at DESC)`,
 	`CREATE INDEX IF NOT EXISTS idx_imsi_audit_at ON imsi_lookup_audit(at DESC)`,
 	`CREATE INDEX IF NOT EXISTS idx_imsi_audit_phase_at ON imsi_lookup_audit(winning_phase, at DESC)`,
+
+	// Phase B3 of the agent-orchestrator plan: per-user weekly
+	// budget cap. Empty user_id row holds the global default; per-
+	// user rows override. Tripwires fire at 80% (warning, agent
+	// continues) and 100% (block, refuse new turns) of the cap.
+	// updated_at moves whenever an operator changes the cap so we
+	// can show "set on N" in the UI.
+	`CREATE TABLE IF NOT EXISTS user_budgets (
+		user_id TEXT PRIMARY KEY,
+		weekly_zar_cap REAL NOT NULL DEFAULT 0,
+		updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+	)`,
+	// cost_records gains user_id so we can sum per-user without
+	// joining through conversations every time. Populated going
+	// forward; older rows stay '' (counted under the anonymous
+	// global cap).
+	`ALTER TABLE cost_records ADD COLUMN user_id TEXT NOT NULL DEFAULT ''`,
+	`CREATE INDEX IF NOT EXISTS idx_cost_records_user_date ON cost_records(user_id, date DESC)`,
 }

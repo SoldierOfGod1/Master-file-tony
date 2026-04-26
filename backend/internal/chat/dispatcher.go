@@ -2,6 +2,7 @@ package chat
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
 	"fmt"
 	"log/slog"
@@ -41,6 +42,7 @@ type Dispatcher struct {
 	cli       *Executor
 	agent     *AgentClient
 	catalogue *ToolCatalogue
+	budget    *BudgetGate // Phase B3: per-user weekly cap
 
 	// AgentEnabledIntents is the set of intents the API path
 	// handles. Anything else (including unclear prompts) goes
@@ -59,9 +61,10 @@ type DispatcherConfig struct {
 	Bus       *event.Bus
 	Executor  *Executor
 	Catalogue *ToolCatalogue
-	APIKey    string // ANTHROPIC_API_KEY
-	Model     string // optional override
+	APIKey    string  // ANTHROPIC_API_KEY
+	Model     string  // optional override
 	APIBaseURL string // optional override (testing)
+	DB        *sql.DB // optional, used for Phase B3 budget gate
 }
 
 func NewDispatcher(cfg DispatcherConfig) *Dispatcher {
@@ -89,13 +92,17 @@ func NewDispatcher(cfg DispatcherConfig) *Dispatcher {
 				"model", d.agent.model, "tools", len(cfg.Catalogue.All()))
 		}
 	}
+	if cfg.DB != nil {
+		d.budget = NewBudgetGate(cfg.DB, cfg.Logger)
+	}
 	return d
 }
 
 // NewDispatcherFromEnv reads ANTHROPIC_API_KEY (and optionally
 // RAIN_AGENT_MODEL) from env and constructs the dispatcher.
 // Missing key => agent path off, CLI handles everything.
-func NewDispatcherFromEnv(log *slog.Logger, bus *event.Bus, cli *Executor, baseURL string) *Dispatcher {
+// db is optional; nil disables Phase B3 budget gating.
+func NewDispatcherFromEnv(log *slog.Logger, bus *event.Bus, cli *Executor, db *sql.DB, baseURL string) *Dispatcher {
 	cat := NewToolCatalogue(baseURL)
 	return NewDispatcher(DispatcherConfig{
 		Logger:    log,
@@ -104,6 +111,7 @@ func NewDispatcherFromEnv(log *slog.Logger, bus *event.Bus, cli *Executor, baseU
 		Catalogue: cat,
 		APIKey:    os.Getenv("ANTHROPIC_API_KEY"),
 		Model:     os.Getenv("RAIN_AGENT_MODEL"),
+		DB:        db,
 	})
 }
 
@@ -118,6 +126,33 @@ func (d *Dispatcher) Dispatch(ctx context.Context, req ExecuteRequest) (string, 
 	useAgent := d.agent != nil &&
 		d.AgentEnabledIntents[classification.Intent] &&
 		classification.Confidence >= d.MinAgentConfidence
+
+	// Phase B3 budget gate. Only checked when we'd actually run
+	// the agent path — the CLI path doesn't burn Anthropic API
+	// spend tracked here. A blocked verdict refuses the agent
+	// run; the user sees a clear refusal so the operator can
+	// intervene (raise the cap, or wait for the weekly reset).
+	if useAgent && d.budget != nil {
+		bs := d.budget.Check(req.UserID)
+		if bs.Verdict == "blocked" {
+			msg := fmt.Sprintf(
+				"agent budget blocked: user %q has spent R%.2f / R%.2f this week (%.0f%%). "+
+					"Falling back to CLI. To raise the cap, see /api/v1/budgets.",
+				bs.UserID, bs.SpentZAR, bs.CapZAR, bs.PctSpent,
+			)
+			if d.log != nil {
+				d.log.Warn("budget blocked agent path",
+					"user", bs.UserID, "spent", bs.SpentZAR, "cap", bs.CapZAR)
+			}
+			d.bus.PublishJSON("chat.stream", StreamEvent{
+				ConversationID: req.ConversationID,
+				Type:           "stream",
+				Content:        msg,
+				Metadata:       map[string]any{"budget": bs, "kind": "budget_blocked"},
+			})
+			useAgent = false
+		}
+	}
 
 	if !useAgent {
 		if d.log != nil {
@@ -142,6 +177,19 @@ func (d *Dispatcher) Dispatch(ctx context.Context, req ExecuteRequest) (string, 
 		systemPrompt += fmt.Sprintf(" The current user is %q.", req.UserID)
 	} else {
 		systemPrompt += " The current user is anonymous; refuse any action that mutates state."
+	}
+	// Phase B3 — surface budget warning to the model so it can
+	// be more economical on tool-use depth when the user is near
+	// the cap. Doesn't change behaviour, just adds a hint.
+	if d.budget != nil {
+		bs := d.budget.Check(req.UserID)
+		if bs.Verdict == "warn" {
+			systemPrompt += fmt.Sprintf(
+				" Note: this user is at %.0f%% of weekly spend cap (R%.2f/R%.2f). "+
+					"Be economical — keep tool-use depth shallow.",
+				bs.PctSpent, bs.SpentZAR, bs.CapZAR,
+			)
+		}
 	}
 	emit := func(t AgentTurn) {
 		// Stream every turn to the bus in the same shape the
