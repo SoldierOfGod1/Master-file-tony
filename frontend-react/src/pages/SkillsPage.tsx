@@ -3,8 +3,8 @@
    Category → HudPanel grouping each bucket of skills.
    ============================================================ */
 
-import { useEffect, useMemo, useState } from 'react';
-import { Sparkles, Server, FileText, Package } from 'lucide-react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
+import { Sparkles, Server, FileText, Package, Save, Plus } from 'lucide-react';
 import HudPanel from '../components/shared/HudPanel';
 import HudSummaryStrip from '../components/shared/HudSummaryStrip';
 import { HudChip, HudStatusLed } from '../components/shared/HudChip';
@@ -12,6 +12,8 @@ import {
   listMCPHealth,
   listMCPServers,
   listSkills,
+  readSkillFile,
+  writeSkillFile,
   type MCPHealth,
   type MCPHealthState,
   type MCPServer,
@@ -38,10 +40,28 @@ const SOURCE_COLOR: Record<SkillSource, string> = {
   plugin:  '#ff7de0',
 };
 
-function SkillRow({ skill }: { readonly skill: Skill }) {
+function SkillRow({ skill, selected, onSelect }: {
+  readonly skill: Skill;
+  readonly selected: boolean;
+  readonly onSelect: (s: Skill) => void;
+}) {
   const color = SOURCE_COLOR[skill.source];
   return (
-    <div className={styles.row} style={{ borderLeftColor: `${color}55` }}>
+    <button
+      type="button"
+      onClick={() => onSelect(skill)}
+      className={styles.row}
+      style={{
+        borderLeftColor: `${color}55`,
+        textAlign: 'left',
+        background: selected ? 'rgba(0,240,255,0.07)' : 'transparent',
+        border: selected ? '1px solid rgba(0,240,255,0.3)' : '1px solid transparent',
+        cursor: 'pointer',
+        width: '100%',
+        fontFamily: 'inherit',
+        color: 'inherit',
+      }}
+    >
       <div className={styles.rowHead}>
         <span className={styles.rowName}>{skill.name}</span>
         <HudChip color={color}>{skill.source}</HudChip>
@@ -54,7 +74,122 @@ function SkillRow({ skill }: { readonly skill: Skill }) {
           <Package size={9} /> {skill.plugin}
         </div>
       )}
-    </div>
+    </button>
+  );
+}
+
+/* ---- Detail pane for the selected skill ---- */
+function SkillDetail({ skill, onSaved }: {
+  readonly skill: Skill;
+  readonly onSaved: () => void;
+}) {
+  const [body, setBody] = useState('');
+  const [draft, setDraft] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+  const [savedAt, setSavedAt] = useState<number | null>(null);
+  const isReadonly = skill.source === 'plugin';
+  const dirty = draft !== body;
+
+  useEffect(() => {
+    let cancelled = false;
+    void (async () => {
+      const text = await readSkillFile(skill.path);
+      if (cancelled) return;
+      setBody(text);
+      setDraft(text);
+      setErr(null);
+    })();
+    return () => { cancelled = true; };
+  }, [skill.path]);
+
+  const onSave = useCallback(async () => {
+    if (!dirty || isReadonly) return;
+    setBusy(true); setErr(null);
+    try {
+      const updated = await writeSkillFile(skill.path, draft);
+      setBody(updated); setDraft(updated);
+      setSavedAt(Date.now());
+      onSaved();
+    } catch (e) {
+      setErr(e instanceof Error ? e.message : 'save failed');
+    } finally {
+      setBusy(false);
+    }
+  }, [skill.path, draft, dirty, isReadonly, onSaved]);
+
+  const color = SOURCE_COLOR[skill.source];
+  return (
+    <HudPanel
+      title={skill.name}
+      accent={color}
+      leading={<HudStatusLed color={color} />}
+      meta={<HudChip color={color}>{skill.source}</HudChip>}
+    >
+      <div style={{ fontSize: 10, opacity: 0.7, marginBottom: 8, fontFamily: 'var(--font-mono, monospace)' }}>
+        {skill.path}
+      </div>
+      {isReadonly && (
+        <div style={{
+          padding: '8px 10px',
+          marginBottom: 8,
+          background: 'rgba(255,170,0,0.08)',
+          borderLeft: '3px solid #ffaa00',
+          color: '#ffaa00',
+          fontSize: 11,
+        }}>
+          Plugin-bundled skill — read-only. Next plugin update would
+          overwrite edits. Copy the content into a new skill under
+          <code> ~/.claude/skills/</code> if you need to modify it.
+        </div>
+      )}
+      <textarea
+        value={draft}
+        onChange={(e) => setDraft(e.target.value)}
+        readOnly={isReadonly}
+        spellCheck={false}
+        style={{
+          width: '100%',
+          minHeight: 360,
+          fontFamily: 'var(--font-mono, monospace)',
+          fontSize: 11,
+          background: 'rgba(0,0,0,0.25)',
+          color: 'var(--ink, #e6f6ff)',
+          border: '1px solid rgba(124,198,255,0.2)',
+          borderRadius: 4,
+          padding: 10,
+          resize: 'vertical',
+        }}
+      />
+      {!isReadonly && (
+        <div style={{ display: 'flex', gap: 8, marginTop: 8, alignItems: 'center' }}>
+          <button
+            type="button"
+            onClick={onSave}
+            disabled={!dirty || busy}
+            style={{
+              display: 'inline-flex', alignItems: 'center', gap: 4,
+              padding: '4px 12px', fontSize: 11, fontFamily: 'inherit',
+              textTransform: 'uppercase', letterSpacing: '0.06em',
+              color: dirty ? '#0a0c12' : '#7cc6ff',
+              background: dirty ? '#6ff2a0' : 'rgba(124,198,255,0.1)',
+              border: '1px solid rgba(111,242,160,0.4)',
+              borderRadius: 4,
+              cursor: dirty && !busy ? 'pointer' : 'not-allowed',
+              opacity: dirty ? 1 : 0.6,
+            }}
+          >
+            <Save size={12} /> {busy ? 'Saving…' : 'Save'}
+          </button>
+          {savedAt && (
+            <span style={{ fontSize: 10, opacity: 0.6 }}>
+              saved {Math.max(1, Math.round((Date.now() - savedAt) / 1000))}s ago
+            </span>
+          )}
+          {err && <span style={{ fontSize: 10, color: '#ff7b7b' }}>{err}</span>}
+        </div>
+      )}
+    </HudPanel>
   );
 }
 
@@ -109,6 +244,7 @@ function MCPRow({ server, health }: { readonly server: MCPServer; readonly healt
 export default function SkillsPage() {
   const [tab, setTab] = useState<Tab>('skills');
   const [skills, setSkills] = useState<Skill[]>([]);
+  const [selectedSkill, setSelectedSkill] = useState<Skill | null>(null);
   const [mcp, setMcp] = useState<MCPServer[]>([]);
   const [mcpHealth, setMcpHealth] = useState<Map<string, MCPHealth>>(new Map());
   const [query, setQuery] = useState('');
@@ -294,6 +430,12 @@ export default function SkillsPage() {
               <div className={styles.empty}>// no skills match your filters</div>
             </HudPanel>
           ) : (
+            <div style={selectedSkill ? {
+              display: 'grid',
+              gridTemplateColumns: '1fr 1fr',
+              gap: 12,
+              alignItems: 'start',
+            } : undefined}>
             <div className={styles.categoryGrid}>
               {skillsByCategory.map(([cat, rows]) => {
                 // Cap rows rendered per category so 1000+ skills don't tank
@@ -312,7 +454,12 @@ export default function SkillsPage() {
                   >
                     <div className={styles.rowList}>
                       {visible.map((s) => (
-                        <SkillRow key={`${s.source}:${s.plugin ?? ''}:${s.name}`} skill={s} />
+                        <SkillRow
+                          key={`${s.source}:${s.plugin ?? ''}:${s.name}`}
+                          skill={s}
+                          selected={selectedSkill?.path === s.path}
+                          onSelect={setSelectedSkill}
+                        />
                       ))}
                       {hidden > 0 && (
                         <div
@@ -330,6 +477,24 @@ export default function SkillsPage() {
                   </HudPanel>
                 );
               })}
+            </div>
+            {selectedSkill && (
+              <div style={{ position: 'sticky', top: 12 }}>
+                <button
+                  type="button"
+                  onClick={() => setSelectedSkill(null)}
+                  style={{
+                    padding: '3px 8px', fontSize: 10, marginBottom: 8,
+                    color: '#7cc6ff', background: 'transparent',
+                    border: '1px solid rgba(124,198,255,0.3)', borderRadius: 4,
+                    cursor: 'pointer', fontFamily: 'inherit',
+                  }}
+                >
+                  ✕ close
+                </button>
+                <SkillDetail skill={selectedSkill} onSaved={() => { /* UI already in sync */ }} />
+              </div>
+            )}
             </div>
           )}
         </>

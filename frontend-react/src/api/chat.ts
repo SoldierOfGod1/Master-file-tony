@@ -3,7 +3,20 @@
    ============================================================ */
 
 import type { Message } from '../types/api';
-import { apiPost } from './client';
+import { apiGet, apiPost } from './client';
+
+export interface ConversationUsage {
+  conversation_id: string;
+  input_tokens: number;
+  output_tokens: number;
+  total_tokens: number;
+  amount_zar: number;
+  model: string;
+}
+
+export async function getConversationUsage(id: string): Promise<ConversationUsage | null> {
+  return await apiGet<ConversationUsage>(`/conversations/${encodeURIComponent(id)}/usage`);
+}
 
 export interface SendMessagePayload {
   conversationId: string;

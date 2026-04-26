@@ -73,3 +73,31 @@ export async function appendAgentMemory(agentPath: string, note: string): Promis
   );
   return res?.content ?? '';
 }
+
+/** Atomically overwrite an agent/hook/rule/skill markdown file. Server
+ *  enforces the sandbox (plugin-owned paths get a 403). Returns the
+ *  canonical re-read content on success. */
+export async function writeFleetFile(path: string, content: string): Promise<string> {
+  const res = await apiPost<{ path: string; content: string }>(
+    '/agent-fleet/file',
+    { path, content },
+  );
+  return res?.content ?? content;
+}
+
+export interface CreateAgentInput {
+  name: string;
+  description: string;
+  category?: string;
+  source: 'global' | 'project';
+  model?: string;
+  body?: string;
+  overwrite?: boolean;
+}
+
+/** POST /agent-fleet/agents — materialises a new .md under the user's
+ *  .claude/agents/ root. Returns the parsed FleetAgent so the caller
+ *  can splice it into the local list. */
+export async function createFleetAgent(input: CreateAgentInput): Promise<FleetAgent | null> {
+  return await apiPost<FleetAgent>('/agent-fleet/agents', input);
+}

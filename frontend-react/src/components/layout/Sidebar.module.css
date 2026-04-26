@@ -6,7 +6,12 @@
   position: fixed;
   top: 0;
   left: 0;
-  width: 240px;
+  /* Width comes from a token that shrinks by breakpoint:
+       desktop   240px (full labels)
+       laptop    220px
+       tablet     64px (icon-only, labels hidden below)
+       mobile      0px (hamburger would replace; hidden entirely) */
+  width: var(--sidebar-w);
   height: 100vh;
   display: flex;
   flex-direction: column;
@@ -16,6 +21,43 @@
   border-right: 1px solid var(--glass-border);
   z-index: 100;
   overflow: hidden;
+  transition: width var(--transition-normal);
+}
+
+/* Icon-only mode: hide the brand label + nav labels + section
+   headers at tablet width. Only the logo + icons remain so the
+   240-→ 64 transition still lets users navigate. */
+@media (max-width: 1024px) {
+  .brandText,
+  .navLabel {
+    display: none;
+  }
+  .sidebar .nav > div > div:first-child:not(:has(a)) {
+    display: none; /* hide group headers in icon-only mode */
+  }
+  .brand {
+    justify-content: center;
+    padding: var(--sp-4) var(--sp-2);
+  }
+  .navLink {
+    justify-content: center;
+    padding: var(--sp-2);
+  }
+  .settingsBtn {
+    justify-content: center;
+  }
+  .settingsBtn > span {
+    display: none;
+  }
+}
+
+/* Fully collapsed at mobile width so the content gets the full
+   screen. A hamburger-toggle is a future enhancement; for now
+   the sidebar simply disappears and /pages render edge-to-edge. */
+@media (max-width: 768px) {
+  .sidebar {
+    display: none;
+  }
 }
 
 /* ----- Brand Section ----- */
@@ -28,20 +70,12 @@
 }
 
 .logo {
-  display: flex;
-  align-items: center;
-  justify-content: center;
   width: 38px;
   height: 38px;
   border-radius: 10px;
-  background: linear-gradient(135deg, var(--rain-blue), var(--neon-cyan));
-  color: #fff;
-  font-family: var(--font-display);
-  font-size: 13px;
-  font-weight: 700;
-  letter-spacing: 1px;
-  text-shadow: 0 0 8px rgba(0, 240, 255, 0.5);
   flex-shrink: 0;
+  object-fit: contain;
+  padding: 4px;
 }
 
 .brandText {

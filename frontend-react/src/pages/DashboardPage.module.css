@@ -95,15 +95,28 @@
   grid-template-columns: repeat(7, 1fr);
   align-items: center;
   gap: 12px;
-  max-width: 1100px;
+  /* Scale the ring with the viewport up to 1600, then cap so
+     individual hex tiles don't balloon into billboards on
+     ultra-wide screens. Below the laptop breakpoint the grid
+     re-flows via the media rules further down. */
+  max-width: 1600px;
   margin: 0 auto;
   position: relative;
   z-index: 1;
 }
 
-@media (max-width: 900px) {
+@media (max-width: 1280px) {
+  /* Laptop — drop the centre orb column so the 6 hex tiles fit
+     in 2 rows of 3 + central orb becomes a separate row. The ring
+     template uses 7 columns (3 left · orb · 3 right), so at
+     laptop size it wraps to 3-col x 3-row layout. */
   .hexRing {
     grid-template-columns: repeat(3, 1fr);
+  }
+}
+@media (max-width: 720px) {
+  .hexRing {
+    grid-template-columns: repeat(2, 1fr);
   }
 }
 
@@ -122,6 +135,12 @@
   padding: 14px 10px;
   text-align: center;
   cursor: default;
+  /* Cap max width so tiles stay balanced on ultra-wide monitors —
+     without this, grid column stretch makes each tile ~400px wide
+     on 3440 and they dwarf the central orb. */
+  max-width: 260px;
+  width: 100%;
+  margin: 0 auto;
   transition: transform 200ms var(--ease-out), filter 200ms var(--ease-out);
   /* Flat-top hexagon */
   clip-path: polygon(25% 0, 75% 0, 100% 50%, 75% 100%, 25% 100%, 0 50%);
@@ -202,7 +221,10 @@
   transform: translateY(36px);
 }
 
-@media (max-width: 900px) {
+@media (max-width: 1280px) {
+  /* Laptop + tablet: re-flow left / center / right into a single
+     column stack so tiles keep their size. The staggered offset
+     is dropped — pointless without the horizontal ring. */
   .hexLeft,
   .hexRight {
     grid-column: 1 / -1;
@@ -288,8 +310,14 @@
 
 .summaryGrid {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+  /* min(200px, 100%) protects against overflow; 4 cards/row at
+     laptop, up to 8/row at ultra-wide. max-width + auto-margin
+     keep the row from stretching edge-to-edge on 3440+ screens. */
+  grid-template-columns: repeat(auto-fit, minmax(min(200px, 100%), 1fr));
   gap: var(--sp-4);
+  max-width: 1600px;
+  width: 100%;
+  margin: 0 auto;
 }
 
 .summaryLink {

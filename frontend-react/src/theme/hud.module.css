@@ -251,13 +251,17 @@
 
 .grid {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(320px, 1fr));
+  /* 260px min is low enough to give 3–4 columns on a 1366 laptop
+     (1126px usable after sidebar) without squeezing the cards.
+     auto-fit + minmax(0, 1fr) ensures the last row doesn't leave
+     a gaping hole on ultra-wide. */
+  grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
   gap: var(--sp-4);
 }
 
 .gridWide {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(380px, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
   gap: var(--sp-4);
 }
 
@@ -295,6 +299,9 @@
 
 /* ----- Responsive ----- */
 
-@media (max-width: 640px) {
+/* Stack the summary strip earlier (900px) because the gauge +
+   segments + action slot genuinely needs ~600px just for
+   itself — below that the three clusters visibly squeeze. */
+@media (max-width: 900px) {
   .summaryStrip { flex-direction: column; align-items: stretch; }
 }

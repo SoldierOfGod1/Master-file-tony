@@ -145,3 +145,37 @@ body::after {
   z-index: 1;
   min-height: 100vh;
 }
+
+/* ----- Native form controls on dark theme -----
+   Browsers render <option> with OS-default light colours even when the
+   parent <select> is themed dark. This forces a readable dark palette
+   for every dropdown across the app. */
+select,
+input[type="text"],
+input[type="search"],
+input[type="email"],
+input[type="tel"],
+input[type="password"],
+input[type="number"],
+textarea {
+  color-scheme: dark;
+}
+
+select option,
+select optgroup {
+  background-color: #0a0c12;
+  color: #e6f6ff;
+}
+
+select option:checked,
+select option:hover {
+  background-color: rgba(0, 240, 255, 0.15);
+  color: #00f0ff;
+}
+
+/* Chrome/Edge: darken the focused/hovered option chip too */
+select option:focus,
+select option:active {
+  background-color: rgba(0, 240, 255, 0.2);
+  color: #00f0ff;
+}

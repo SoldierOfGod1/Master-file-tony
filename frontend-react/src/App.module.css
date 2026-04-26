@@ -9,18 +9,27 @@
   flex: 1;
   display: flex;
   flex-direction: column;
-  margin-left: 240px;
+  /* Sidebar width is a token now — scales from 240 → 220 (laptop)
+     → 64 (tablet icon-only) → 0 (mobile) via variables.css. */
+  margin-left: var(--sidebar-w);
   min-height: 100vh;
+  min-width: 0; /* flex child: prevents overflow when content grid is wider */
 }
 
 .content {
   flex: 1;
-  padding: var(--sp-6);
+  padding: var(--sp-6) var(--page-pad-x);
   overflow-y: auto;
+  /* Cap the content region on ultra-wide displays so cards stay
+     readable; pages still manage their own inner grids. */
+  max-width: var(--page-max);
+  width: 100%;
+  margin: 0 auto;
+  box-sizing: border-box;
 }
 
-@media (max-width: 768px) {
-  .main {
-    margin-left: 0;
+@media (max-width: 1024px) {
+  .content {
+    padding: var(--sp-4) var(--page-pad-x);
   }
 }

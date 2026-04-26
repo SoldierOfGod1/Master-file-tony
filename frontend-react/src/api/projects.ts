@@ -3,7 +3,7 @@
    ============================================================ */
 
 import type { Project } from '../types/api';
-import { apiGet, apiPost, apiPut } from './client';
+import { apiDelete, apiGet, apiPost, apiPut } from './client';
 
 export async function listProjects(): Promise<Project[]> {
   const data = await apiGet<Project[]>('/projects');
@@ -27,8 +27,34 @@ export async function updateProject(
   return apiPut<Project>(`/projects/${encodeURIComponent(id)}`, updates);
 }
 
-/** Triggers a push of every local project to ClickUp. Returns the counts
- *  reported by the backend (`pushed`, `skipped`). */
-export async function syncProjects(): Promise<{ pushed: number; skipped: number } | null> {
-  return apiPost<{ pushed: number; skipped: number }>('/projects/sync', {});
+/** Deletes a project both locally AND its mirrored ClickUp task (+ any
+ *  cached subtasks). Returns true on success, false on 404 / error. */
+export async function deleteProject(id: string): Promise<boolean> {
+  return apiDelete(`/projects/${encodeURIComponent(id)}`);
+}
+
+/** Kicks off an async push of every local project to ClickUp. Returns
+ *  immediately; caller should poll `getSyncStatus` to watch progress. */
+export async function syncProjects(): Promise<SyncStatus | null> {
+  const res = await apiPost<{ started: boolean; already_running?: boolean; status: SyncStatus }>(
+    '/projects/sync', {},
+  );
+  return res?.status ?? null;
+}
+
+export interface SyncStatus {
+  in_progress: boolean;
+  started_at?: string;
+  finished_at?: string;
+  total: number;
+  pushed: number;
+  skipped: number;
+  current_id?: string;
+  last_error?: string;
+  last_duration?: string;
+}
+
+/** Poll for the latest sync progress. Cheap — no external calls. */
+export async function getSyncStatus(): Promise<SyncStatus | null> {
+  return apiGet<SyncStatus>('/projects/sync/status');
 }

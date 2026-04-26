@@ -76,6 +76,66 @@
   --color-neon-green: var(--neon-green);
   --color-neon-magenta: var(--neon-magenta);
   --color-bg-void: var(--bg-void);
+
+  /* --- Layout + responsive tokens ----------------------------
+     Five breakpoints map to the devices this tool actually runs
+     on: mobile, tablet, cramped-laptop (1366), desktop, and TV
+     wall. Other styles reference the *widths* directly via
+     `@media (min-width: ...)`; the names below are provided for
+     documentation and for JS consumers (window.matchMedia).
+
+     Sidebar width + page max-width are tokens so the App/Sidebar
+     layout and every page's content region stay in sync — when
+     we later add a "collapse sidebar" mode, we flip one token
+     and everything follows. */
+  --bp-sm: 640px;   /* large phone */
+  --bp-md: 1024px;  /* tablet landscape / small laptop */
+  --bp-lg: 1366px;  /* standard laptop */
+  --bp-xl: 1920px;  /* desktop */
+  --bp-2xl: 2560px; /* ultra-wide / 4K TV wall */
+
+  --sidebar-w: 240px;
+  --page-max: 1600px; /* content cap — keeps cards compact on wide screens */
+  --page-pad-x: 24px;
+}
+
+@media (max-width: 1366px) {
+  :root {
+    --sidebar-w: 220px;
+    --page-pad-x: 16px;
+  }
+}
+
+@media (max-width: 1024px) {
+  :root {
+    --sidebar-w: 64px; /* icon-only sidebar — labels hidden via CSS */
+    --page-pad-x: 12px;
+  }
+}
+
+@media (max-width: 768px) {
+  :root {
+    --sidebar-w: 0px; /* sidebar collapses entirely; hamburger would replace */
+    --page-pad-x: 10px;
+  }
+}
+
+@media (min-width: 1920px) {
+  :root {
+    --page-max: 1800px;
+  }
+}
+
+@media (min-width: 2560px) {
+  :root {
+    --page-max: 2400px; /* breathe on ultra-wide without going edge-to-edge */
+  }
+}
+
+@media (min-width: 3200px) {
+  :root {
+    --page-max: 2800px; /* 3440x1440 / 4K: fill more of the screen */
+  }
 }
 
 /* Holographic border animation used by .holoFrame + .kpi tiles */

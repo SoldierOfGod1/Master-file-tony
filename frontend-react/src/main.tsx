@@ -24,6 +24,9 @@ import SettingsPage from './pages/SettingsPage'
 import SkillsPage from './pages/SkillsPage'
 import ClickUpPage from './pages/ClickUpPage'
 import Customer360Page from './pages/Customer360Page'
+import AxiomExplorerPage from './pages/AxiomExplorerPage'
+import SalesPage from './pages/SalesPage'
+import ServicePage from './pages/ServicePage'
 
 const router = createBrowserRouter([
   {
@@ -48,6 +51,9 @@ const router = createBrowserRouter([
       { path: 'skills', element: <SkillsPage /> },
       { path: 'clickup', element: <ClickUpPage /> },
       { path: 'customer', element: <Customer360Page /> },
+      { path: 'axiom', element: <AxiomExplorerPage /> },
+      { path: 'sales', element: <SalesPage /> },
+      { path: 'service', element: <ServicePage /> },
       { path: 'settings', element: <SettingsPage /> },
     ],
   },

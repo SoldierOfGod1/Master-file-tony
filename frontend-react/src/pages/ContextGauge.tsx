@@ -15,6 +15,9 @@ interface Message {
 interface Props {
   readonly messages: readonly Message[];
   readonly modelHint?: string;
+  /** Real running total from cost_records. When provided, overrides the
+      char÷4 estimate so the gauge reflects exact tokens Claude reported. */
+  readonly realTokens?: number;
 }
 
 // Approximate context windows for the Claude CLI's default models.
@@ -34,7 +37,7 @@ function estimateTokens(text: string): number {
   return Math.ceil(text.length / 4);
 }
 
-export default function ContextGauge({ messages, modelHint }: Props) {
+export default function ContextGauge({ messages, modelHint, realTokens }: Props) {
   const window = useMemo(() => {
     const hint = (modelHint ?? '').toLowerCase();
     for (const m of MODEL_WINDOWS) {
@@ -43,19 +46,27 @@ export default function ContextGauge({ messages, modelHint }: Props) {
     return DEFAULT_WINDOW;
   }, [modelHint]);
 
-  const used = useMemo(() => {
+  const estimated = useMemo(() => {
     let total = SYSTEM_PROMPT_OVERHEAD;
     for (const m of messages) total += estimateTokens(m.content ?? '');
     return total;
   }, [messages]);
 
+  // Prefer the real running total Claude CLI reported; fall back to the
+  // char÷4 estimate when we don't have a recorded run yet (brand-new
+  // conversation, or Claude CLI version that didn't emit a usage marker).
+  const usingReal = typeof realTokens === 'number' && realTokens > 0;
+  const used = usingReal ? realTokens : estimated;
+
   const pct = Math.min(100, Math.round((used / window.tokens) * 100));
 
   const color = pct >= 90 ? '#ff7b7b' : pct >= 70 ? '#ffb86b' : '#6ff2a0';
 
+  const sourceLabel = usingReal ? 'real' : 'estimated';
+
   return (
     <div
-      title={`~${used.toLocaleString()} / ${window.tokens.toLocaleString()} tokens (${window.label})`}
+      title={`~${used.toLocaleString()} / ${window.tokens.toLocaleString()} tokens (${window.label}) · ${sourceLabel}`}
       style={{
         display: 'inline-flex',
         alignItems: 'center',
@@ -88,6 +99,15 @@ export default function ContextGauge({ messages, modelHint }: Props) {
         />
       </div>
       <span style={{ color, minWidth: 28, textAlign: 'right' }}>{pct}%</span>
+      <span
+        style={{
+          fontSize: 9,
+          color: usingReal ? '#6ff2a0' : '#ffb86b',
+          opacity: 0.85,
+        }}
+      >
+        {usingReal ? '●' : '~'}
+      </span>
     </div>
   );
 }

@@ -21,6 +21,9 @@ import {
   ExternalLink,
   Inbox,
   FolderKanban,
+  MoreHorizontal,
+  Edit3,
+  Trash2,
 } from 'lucide-react';
 import Modal from '../components/shared/Modal';
 import HudPanel from '../components/shared/HudPanel';
@@ -34,7 +37,8 @@ import {
   getClickUpConfig,
   listClickUpTasks,
 } from '../api/clickup';
-import { syncProjects, updateProject } from '../api/projects';
+import { deleteProject, getSyncStatus, syncProjects, updateProject } from '../api/projects';
+import ProjectEditModal from './ProjectEditModal';
 import {
   PROJECT_STATUSES,
   type Project,
@@ -74,13 +78,23 @@ function formatRelative(iso?: string): string {
 }
 
 function ProjectCard({
-  project, onStatus, updating,
+  project, onStatus, onEdit, onDelete, updating,
 }: {
   readonly project: Project;
   readonly onStatus: (p: Project, status: ProjectStatus) => void;
+  readonly onEdit: (p: Project) => void;
+  readonly onDelete: (p: Project) => void;
   readonly updating: boolean;
 }) {
   const accent = colorForStatus(project.status);
+  const [menuOpen, setMenuOpen] = useState(false);
+  useEffect(() => {
+    if (!menuOpen) return;
+    const close = () => setMenuOpen(false);
+    window.addEventListener('click', close);
+    return () => window.removeEventListener('click', close);
+  }, [menuOpen]);
+
   return (
     <div className={styles.projCard} style={{ borderLeftColor: accent }}>
       <div className={styles.projCardHead}>
@@ -97,6 +111,46 @@ function ProjectCard({
             <ExternalLink size={11} />
           </a>
         )}
+        <span style={{ position: 'relative', display: 'inline-flex' }}>
+          <button
+            type="button"
+            onClick={(e) => { e.stopPropagation(); setMenuOpen((v) => !v); }}
+            title="Edit or delete"
+            style={{
+              padding: 2, color: '#7cc6ff', background: 'transparent',
+              border: 'none', cursor: 'pointer',
+            }}
+          >
+            <MoreHorizontal size={12} />
+          </button>
+          {menuOpen && (
+            <div
+              onClick={(e) => e.stopPropagation()}
+              style={{
+                position: 'absolute', top: '100%', right: 0, zIndex: 5,
+                marginTop: 4, minWidth: 128,
+                background: 'var(--surface, #0d111b)',
+                border: '1px solid rgba(124,198,255,0.3)',
+                borderRadius: 4, boxShadow: '0 6px 22px rgba(0,0,0,0.5)',
+              }}
+            >
+              <button
+                type="button"
+                onClick={(e) => { e.stopPropagation(); setMenuOpen(false); onEdit(project); }}
+                style={menuItemStyle('#00f0ff')}
+              >
+                <Edit3 size={11} /> Edit
+              </button>
+              <button
+                type="button"
+                onClick={(e) => { e.stopPropagation(); setMenuOpen(false); onDelete(project); }}
+                style={menuItemStyle('#ff7b7b')}
+              >
+                <Trash2 size={11} /> Delete
+              </button>
+            </div>
+          )}
+        </span>
       </div>
 
       {project.localPath && (
@@ -195,6 +249,8 @@ export default function ClickUpPage() {
   // ---- Kanban state (shared with /projects, just rendered differently) ----
   const [syncing, setSyncing] = useState(false);
   const [updatingId, setUpdatingId] = useState<string | null>(null);
+  const [editingProject, setEditingProject] = useState<Project | null>(null);
+  const [creatingNew, setCreatingNew] = useState(false);
 
   // ---- Data loaders ----
   const reloadTasks = useCallback(async () => {
@@ -251,10 +307,41 @@ export default function ClickUpPage() {
     }
   }, [refreshAll]);
 
+  const handleEdit = useCallback((p: Project) => setEditingProject(p), []);
+
+  const handleDelete = useCallback(async (p: Project) => {
+    const ok = window.confirm(
+      `Delete "${p.name}"?\n\nThis removes the project locally AND its ClickUp task (+ subtasks).\nThis cannot be undone.`,
+    );
+    if (!ok) return;
+    const success = await deleteProject(p.id);
+    if (success) {
+      await refreshAll();
+    } else {
+      window.alert('Delete failed — check backend logs.');
+    }
+  }, [refreshAll]);
+
+  const handleSaved = useCallback(async () => {
+    setEditingProject(null);
+    setCreatingNew(false);
+    await refreshAll();
+  }, [refreshAll]);
+
   const handleSyncAll = useCallback(async () => {
     setSyncing(true);
     try {
+      // Kick off the async sync — returns 202 immediately.
       await syncProjects();
+      // Poll every 1.5s until the server reports in_progress=false.
+      // Caps at 10 minutes to prevent runaway polling on a hung run.
+      const deadline = Date.now() + 10 * 60 * 1000;
+      for (;;) {
+        await new Promise((r) => setTimeout(r, 1500));
+        const s = await getSyncStatus();
+        if (!s || !s.in_progress) break;
+        if (Date.now() > deadline) break;
+      }
       await refreshAll();
       await reloadTasks();
     } finally {
@@ -324,6 +411,19 @@ export default function ClickUpPage() {
               <RefreshCw size={13} className={syncing ? styles.spin : undefined} />
               {syncing ? 'Syncing…' : 'Sync now'}
             </button>
+            <button
+              type="button"
+              className={styles.syncBtn}
+              onClick={() => setCreatingNew(true)}
+              title="Create a new project (auto-pushes to ClickUp on save)"
+              style={{
+                background: 'rgba(111,242,160,0.15)',
+                borderColor: 'rgba(111,242,160,0.5)',
+                color: '#6ff2a0',
+              }}
+            >
+              <Plus size={13} /> New project
+            </button>
           </div>
         }
       />
@@ -376,6 +476,8 @@ export default function ClickUpPage() {
                           key={p.id}
                           project={p}
                           onStatus={handleStatus}
+                          onEdit={handleEdit}
+                          onDelete={handleDelete}
                           updating={updatingId === p.id}
                         />
                       ))
@@ -491,6 +593,25 @@ export default function ClickUpPage() {
           </div>
         </form>
       </Modal>
+
+      {(editingProject || creatingNew) && (
+        <ProjectEditModal
+          project={editingProject ?? undefined}
+          onClose={() => { setEditingProject(null); setCreatingNew(false); }}
+          onSaved={handleSaved}
+        />
+      )}
     </div>
   );
+}
+
+function menuItemStyle(color: string): React.CSSProperties {
+  return {
+    display: 'flex', alignItems: 'center', gap: 6,
+    width: '100%', padding: '6px 10px', fontSize: 11,
+    fontFamily: 'inherit',
+    color, background: 'transparent', border: 0,
+    borderBottom: '1px solid rgba(124,198,255,0.1)',
+    cursor: 'pointer', textAlign: 'left',
+  };
 }

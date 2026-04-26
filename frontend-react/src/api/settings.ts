@@ -1,14 +1,30 @@
-/* App-level settings (ClickUp workspace swap lives here).
-   The backend masks the ClickUp token when reading; writes respecting the
-   mask (i.e. re-saving the masked value leaves the stored token alone). */
+/* App-level settings — ClickUp, Axiom Postgres, Athena CDR usage.
+   Secret-like fields (api tokens, passwords, AWS secret keys) come
+   back masked from the backend; writes that echo the masked value
+   are ignored server-side so a re-save never clobbers the real
+   stored secret. */
 
 import { apiGet, apiPut } from './client';
 
 export interface AppSettings {
-  'clickup.api_token': string;       // masked value like "••••ABCD" when set
+  // ---- ClickUp ----
+  'clickup.api_token': string;       // masked "••••ABCD"
   'clickup.workspace_id': string;
   'clickup.list_id': string;
   'clickup.configured': boolean;
+
+  // ---- Axiom Postgres (connection strings stored elsewhere; legacy) ----
+  'axiom.configured'?: boolean;
+
+  // ---- Athena — Customer 360 CDR usage ----
+  'athena.enabled'?: string;                 // "true" | "false"
+  'athena.region'?: string;                  // eu-west-1
+  'athena.database'?: string;                // usage
+  'athena.workgroup'?: string;               // optional
+  'athena.output_s3'?: string;               // s3://bucket/prefix/
+  'athena.aws_access_key_id'?: string;
+  'athena.aws_secret_access_key'?: string;   // masked on read
+  'athena.configured'?: boolean;
 }
 
 export async function getSettings(): Promise<AppSettings | null> {
@@ -17,7 +33,7 @@ export async function getSettings(): Promise<AppSettings | null> {
 
 /** Partial update. Pass only the keys the user changed. */
 export async function updateSettings(
-  patch: Partial<Pick<AppSettings, 'clickup.api_token' | 'clickup.workspace_id' | 'clickup.list_id'>>,
+  patch: Record<string, string>,
 ): Promise<AppSettings | null> {
   return apiPut<AppSettings>('/settings', patch);
 }

@@ -26,11 +26,13 @@ import HudSummaryStrip from '../components/shared/HudSummaryStrip';
 import { HudChip, HudStatusLed } from '../components/shared/HudChip';
 import {
   appendAgentMemory,
+  createFleetAgent,
   listFleetAgents,
   listFleetHooks,
   listFleetRules,
   readAgentMemory,
   readFleetFile,
+  writeFleetFile,
   type FleetAgent,
   type FleetHook,
   type FleetRule,
@@ -271,10 +273,17 @@ function AgentDetail({ agent, onChange }: {
   readonly onChange: () => void;
 }) {
   const [body, setBody] = useState('');
+  const [draft, setDraft] = useState('');      // editable copy of `body`
   const [memory, setMemory] = useState('');
   const [note, setNote] = useState('');
   const [saving, setSaving] = useState(false);
+  const [savingSource, setSavingSource] = useState(false);
+  const [saveError, setSaveError] = useState<string | null>(null);
+  const [lastSavedAt, setLastSavedAt] = useState<number | null>(null);
   const [mode, setMode] = useState<'source' | 'memory'>('memory');
+
+  const isReadonly = agent.source === 'plugin';
+  const dirty = draft !== body;
 
   useEffect(() => {
     let cancelled = false;
@@ -285,10 +294,50 @@ function AgentDetail({ agent, onChange }: {
       ]);
       if (cancelled) return;
       setBody(src);
+      setDraft(src);
       setMemory(mem);
+      setSaveError(null);
     })();
     return () => { cancelled = true; };
   }, [agent.path]);
+
+  const handleSaveSource = useCallback(async () => {
+    if (!dirty || isReadonly) return;
+    setSavingSource(true);
+    setSaveError(null);
+    try {
+      const updated = await writeFleetFile(agent.path, draft);
+      setBody(updated);
+      setDraft(updated);
+      setLastSavedAt(Date.now());
+      onChange();
+    } catch (e) {
+      setSaveError(e instanceof Error ? e.message : 'save failed');
+    } finally {
+      setSavingSource(false);
+    }
+  }, [agent.path, draft, dirty, isReadonly, onChange]);
+
+  const handleCloneToGlobal = useCallback(async () => {
+    setSavingSource(true);
+    setSaveError(null);
+    try {
+      const created = await createFleetAgent({
+        name: agent.name + '-copy',
+        description: agent.description || 'Cloned from ' + agent.file_name,
+        category: agent.category,
+        source: 'global',
+        body: draft,
+      });
+      if (created) {
+        onChange();
+      }
+    } catch (e) {
+      setSaveError(e instanceof Error ? e.message : 'clone failed');
+    } finally {
+      setSavingSource(false);
+    }
+  }, [agent, draft, onChange]);
 
   const handleAppend = useCallback(async (e: FormEvent) => {
     e.preventDefault();
@@ -361,10 +410,96 @@ function AgentDetail({ agent, onChange }: {
           </div>
         </>
       ) : (
-        <pre className={styles.sourceBox}>{body || '// empty file'}</pre>
+        <div>
+          {isReadonly && (
+            <div style={{
+              padding: '8px 10px',
+              marginBottom: 8,
+              background: 'rgba(255,170,0,0.08)',
+              borderLeft: '3px solid #ffaa00',
+              color: '#ffaa00',
+              fontSize: 11,
+            }}>
+              Plugin-bundled agent — read-only. Next plugin update would
+              overwrite edits. Use <b>Clone to global</b> to get an
+              editable copy under <code>~/.claude/agents/</code>.
+            </div>
+          )}
+          <textarea
+            className={styles.sourceBox}
+            value={draft}
+            onChange={(e) => setDraft(e.target.value)}
+            readOnly={isReadonly}
+            spellCheck={false}
+            style={{
+              width: '100%',
+              minHeight: 320,
+              fontFamily: 'var(--font-mono, monospace)',
+              fontSize: 11,
+              background: 'rgba(0,0,0,0.25)',
+              color: 'var(--ink, #e6f6ff)',
+              border: '1px solid rgba(124,198,255,0.2)',
+              borderRadius: 4,
+              padding: 10,
+              resize: 'vertical',
+            }}
+          />
+          <div style={{
+            display: 'flex', gap: 8, marginTop: 8,
+            alignItems: 'center', flexWrap: 'wrap',
+          }}>
+            {!isReadonly && (
+              <button
+                type="button"
+                onClick={handleSaveSource}
+                disabled={!dirty || savingSource}
+                style={btnStyle(dirty ? '#6ff2a0' : '#7cc6ff', !dirty || savingSource)}
+              >
+                <Save size={12} /> {savingSource ? 'Saving…' : 'Save source'}
+              </button>
+            )}
+            {isReadonly && (
+              <button
+                type="button"
+                onClick={handleCloneToGlobal}
+                disabled={savingSource}
+                style={btnStyle('#c488ff', savingSource)}
+              >
+                <Plus size={12} /> {savingSource ? 'Cloning…' : 'Clone to global'}
+              </button>
+            )}
+            {lastSavedAt && (
+              <span style={{ fontSize: 10, opacity: 0.6 }}>
+                saved {Math.max(1, Math.round((Date.now() - lastSavedAt) / 1000))}s ago
+              </span>
+            )}
+            {saveError && (
+              <span style={{ fontSize: 10, color: '#ff7b7b' }}>{saveError}</span>
+            )}
+          </div>
+        </div>
       )}
     </HudPanel>
   );
+}
+
+function btnStyle(color: string, disabled: boolean): React.CSSProperties {
+  return {
+    display: 'inline-flex',
+    alignItems: 'center',
+    gap: 4,
+    padding: '4px 12px',
+    fontFamily: 'inherit',
+    fontSize: 11,
+    textTransform: 'uppercase',
+    letterSpacing: '0.06em',
+    color: disabled ? '#7cc6ff' : '#0a0c12',
+    background: disabled ? 'rgba(124,198,255,0.12)' : color,
+    border: `1px solid ${color}66`,
+    borderRadius: 4,
+    cursor: disabled ? 'not-allowed' : 'pointer',
+    opacity: disabled ? 0.6 : 1,
+  };
 }
 
 /* ============================================================
@@ -593,6 +728,10 @@ export default function AgentFleetPage() {
   const [tab, setTab] = useState<Tab>('agents');
   const [counts, setCounts] = useState({ agents: 0, hooks: 0, rules: 0 });
   const [busy, setBusy] = useState(false);
+  const [createOpen, setCreateOpen] = useState(false);
+  // Bumping this key remounts the AgentsTab so newly-created agents
+  // show up immediately without a hard refresh.
+  const [agentsReloadKey, setAgentsReloadKey] = useState(0);
 
   const refresh = useCallback(async () => {
     setBusy(true);
@@ -650,16 +789,133 @@ export default function AgentFleetPage() {
         <button
           type="button"
           className={styles.newAgentBtn}
-          disabled
-          title="Creating agents from the UI is coming soon"
+          onClick={() => setCreateOpen(true)}
         >
           <Plus size={13} /> New agent
         </button>
       </div>
 
-      {tab === 'agents' && <AgentsTab />}
+      {tab === 'agents' && <AgentsTab key={agentsReloadKey} />}
       {tab === 'hooks' && <HooksTab />}
       {tab === 'rules' && <RulesTab />}
+
+      {createOpen && (
+        <CreateAgentModal
+          onClose={() => setCreateOpen(false)}
+          onCreated={() => {
+            setCreateOpen(false);
+            setAgentsReloadKey((k) => k + 1);
+            void refresh();
+          }}
+        />
+      )}
     </div>
   );
 }
+
+/* ---- New agent modal ---- */
+function CreateAgentModal({ onClose, onCreated }: {
+  readonly onClose: () => void;
+  readonly onCreated: (a: FleetAgent) => void;
+}) {
+  const [name, setName] = useState('');
+  const [description, setDescription] = useState('');
+  const [category, setCategory] = useState('');
+  const [source, setSource] = useState<'global' | 'project'>('global');
+  const [body, setBody] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+
+  const canSubmit = name.trim().length > 0 && description.trim().length > 0 && !busy;
+
+  const submit = useCallback(async (e: FormEvent) => {
+    e.preventDefault();
+    if (!canSubmit) return;
+    setBusy(true);
+    setErr(null);
+    try {
+      const created = await createFleetAgent({
+        name: name.trim(), description: description.trim(),
+        category: category.trim(), source, body: body.trim(),
+      });
+      if (created) onCreated(created);
+      else setErr('create failed (no response)');
+    } catch (e) {
+      setErr(e instanceof Error ? e.message : 'create failed');
+    } finally {
+      setBusy(false);
+    }
+  }, [name, description, category, source, body, canSubmit, onCreated]);
+
+  return (
+    <div style={{
+      position: 'fixed', inset: 0, zIndex: 100,
+      background: 'rgba(0,0,0,0.65)',
+      display: 'flex', alignItems: 'center', justifyContent: 'center',
+      padding: 20,
+    }} onClick={onClose}>
+      <form
+        onSubmit={submit}
+        onClick={(e) => e.stopPropagation()}
+        style={{
+          width: 'min(560px, 100%)',
+          maxHeight: '90vh', overflow: 'auto',
+          background: 'var(--surface, #0d111b)',
+          border: '1px solid rgba(0,240,255,0.3)',
+          borderRadius: 8, padding: 20,
+          fontFamily: 'inherit',
+          display: 'grid', gap: 10,
+        }}
+      >
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+          <Plus size={16} color="#00f0ff" />
+          <h3 style={{ margin: 0, fontSize: 14, color: '#00f0ff' }}>New agent</h3>
+        </div>
+        <label style={labelStyle}>Name
+          <input type="text" value={name} onChange={(e) => setName(e.target.value)}
+                 placeholder="my-new-agent" autoFocus style={inputStyle} />
+        </label>
+        <label style={labelStyle}>Description
+          <input type="text" value={description} onChange={(e) => setDescription(e.target.value)}
+                 placeholder="What does this agent do?" style={inputStyle} />
+        </label>
+        <label style={labelStyle}>Category (optional)
+          <input type="text" value={category} onChange={(e) => setCategory(e.target.value)}
+                 placeholder="Productivity | Debug | Review …" style={inputStyle} />
+        </label>
+        <label style={labelStyle}>Destination
+          <select value={source} onChange={(e) => setSource(e.target.value as 'global' | 'project')}
+                  style={inputStyle}>
+            <option value="global">Global · ~/.claude/agents</option>
+            <option value="project">Project · .claude/agents</option>
+          </select>
+        </label>
+        <label style={labelStyle}>Body (markdown — leave empty for a template)
+          <textarea value={body} onChange={(e) => setBody(e.target.value)} rows={8}
+                    placeholder="# My agent&#10;&#10;Agent instructions go here…"
+                    style={{ ...inputStyle, fontFamily: 'var(--font-mono, monospace)', resize: 'vertical' }} />
+        </label>
+        {err && <div style={{ color: '#ff7b7b', fontSize: 11 }}>{err}</div>}
+        <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end' }}>
+          <button type="button" onClick={onClose}
+                  style={btnStyle('#7cc6ff', false)}>Cancel</button>
+          <button type="submit" disabled={!canSubmit}
+                  style={btnStyle('#6ff2a0', !canSubmit)}>
+            {busy ? 'Creating…' : 'Create agent'}
+          </button>
+        </div>
+      </form>
+    </div>
+  );
+}
+
+const labelStyle: React.CSSProperties = {
+  display: 'grid', gap: 4, fontSize: 11, color: 'var(--ink-dim, #7cc6ff)',
+};
+const inputStyle: React.CSSProperties = {
+  padding: '6px 8px',
+  background: 'rgba(0,0,0,0.3)',
+  color: 'var(--ink, #e6f6ff)',
+  border: '1px solid rgba(124,198,255,0.25)',
+  borderRadius: 4, fontFamily: 'inherit', fontSize: 12,
+};

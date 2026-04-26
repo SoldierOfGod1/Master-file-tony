@@ -9,7 +9,7 @@ import {
   Bot,
   ListChecks,
   Coins,
-  DollarSign,
+  Banknote,
   ArrowUpCircle,
   AlertTriangle,
   TrendingUp,
@@ -24,6 +24,7 @@ import {
 import { useCommandCentre } from '../context/CommandCentreContext';
 import GlassCard from '../components/shared/GlassCard';
 import QualityGatePanel from './QualityGatePanel';
+import PlatformMonitorPanel from './PlatformMonitorPanel';
 import type { KpiEntry } from '../types/api';
 import styles from './DashboardPage.module.css';
 
@@ -40,9 +41,12 @@ const KPI_CARDS: readonly KpiCardConfig[] = [
   { key: 'activeAgents', label: 'Active Agents', icon: Bot, format: (v) => String(v) },
   { key: 'tasksInFlight', label: 'Tasks In-Flight', icon: ListChecks, format: (v) => String(v) },
   { key: 'tokensToday', label: 'Tokens Today', icon: Coins, format: (v) => v >= 1000 ? `${(v / 1000).toFixed(1)}K` : String(v) },
-  { key: 'costToday', label: 'Cost Today', icon: DollarSign, format: (v) => `R${v.toFixed(2)}` },
-  { key: 'uptime', label: 'Uptime', icon: ArrowUpCircle, format: (v) => `${v}%` },
-  { key: 'errorRate', label: 'Error Rate', icon: AlertTriangle, format: (v) => `${v}%` },
+  { key: 'costToday', label: 'Cost Today', icon: Banknote, format: (v) => `R${v.toFixed(2)}` },
+  // uptime is wall-clock seconds since server start (backend sends unit:"seconds").
+  // Show as hours with 2 decimals — a % suffix here was the old bug that produced
+  // values like "55216.00%" (15h of uptime rendered as a percentage).
+  { key: 'uptime', label: 'Uptime', icon: ArrowUpCircle, format: (v) => `${(v / 3600).toFixed(2)} h` },
+  { key: 'errorRate', label: 'Error Rate', icon: AlertTriangle, format: (v) => `${v.toFixed(2)}%` },
 ] as const;
 
 interface SummaryCardConfig {
@@ -57,9 +61,18 @@ const SUMMARY_CARDS: readonly SummaryCardConfig[] = [
   { to: '/tasks', label: 'Task Board', icon: ListChecks, count: (s) => `${s.tasks.length} tasks` },
   { to: '/feed', label: 'Activity Feed', icon: Activity, count: (s) => `${s.feed.length} events` },
   { to: '/tools', label: 'Tools Hub', icon: Wrench, count: (s) => `${s.tools.length} tools` },
-  { to: '/health', label: 'System Health', icon: Activity, count: () => 'Live' },
+  { to: '/health', label: 'System Health', icon: Activity, count: (s) => {
+    // Derive an honest summary from the live KPI payload:
+    //   uptime (wall-clock) + error rate (last hour).
+    // Before this it was a hardcoded literal "Live" — which the
+    // metrics audit flagged as a stub on the Dashboard.
+    const uptime = s.kpis?.uptime?.value;
+    const errors = s.kpis?.errorRate?.value ?? 0;
+    if (uptime == null) return 'Live';
+    return `${(uptime / 3600).toFixed(2)} h · ${errors.toFixed(2)} err`;
+  } },
   { to: '/logs', label: 'Log Terminal', icon: Terminal, count: (s) => `${s.logs.length} entries` },
-  { to: '/costs', label: 'Cost Analytics', icon: DollarSign, count: (s) => s.costs ? `R${s.costs.total.toFixed(2)}` : '--' },
+  { to: '/costs', label: 'Cost Analytics', icon: Banknote, count: (s) => s.costs ? `R${s.costs.total.toFixed(2)}` : '--' },
   { to: '/security', label: 'Security', icon: Shield, count: (s) => s.security ? `Score: ${s.security.trustScore}` : '--' },
 ] as const;
 
@@ -142,8 +155,19 @@ export default function DashboardPage() {
         </div>
       </div>
 
-      <div style={{ margin: '24px 0' }}>
+      {/* 2-column above 1100px, single column below. Max-width cap
+          stops each panel exceeding ~800px on ultra-wide so the
+          content stays readable instead of stretching edge-to-edge. */}
+      <div style={{
+        margin: '24px auto',
+        display: 'grid',
+        gridTemplateColumns: 'repeat(auto-fit, minmax(min(480px, 100%), 1fr))',
+        gap: 16,
+        maxWidth: 1600,
+        width: '100%',
+      }}>
         <QualityGatePanel />
+        <PlatformMonitorPanel />
       </div>
 
       <div className={styles.summaryGrid}>

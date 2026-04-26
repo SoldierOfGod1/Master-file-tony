@@ -1,6 +1,6 @@
 /* Skills + MCP catalogue API */
 
-import { apiGet } from './client';
+import { apiGet, apiPost } from './client';
 
 export type SkillSource = 'global' | 'project' | 'plugin';
 
@@ -44,4 +44,22 @@ export async function listMCPServers(): Promise<MCPServer[]> {
 
 export async function listMCPHealth(): Promise<MCPHealth[]> {
   return (await apiGet<MCPHealth[]>('/mcp/health')) ?? [];
+}
+
+/** Read a SKILL.md file (sandboxed to ~/.claude/skills + project
+ *  .claude/skills + the agents/hooks/rules roots the scanner knows). */
+export async function readSkillFile(path: string): Promise<string> {
+  const res = await apiGet<{ path: string; content: string }>(
+    `/skills/file?path=${encodeURIComponent(path)}`,
+  );
+  return res?.content ?? '';
+}
+
+/** Atomically overwrite a user-owned SKILL.md. Plugin-owned paths
+ *  return 403 — caller should clone first. */
+export async function writeSkillFile(path: string, content: string): Promise<string> {
+  const res = await apiPost<{ path: string; content: string }>(
+    '/skills/file', { path, content },
+  );
+  return res?.content ?? content;
 }
