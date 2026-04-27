@@ -651,10 +651,15 @@ func (a *API) handleCustomerLookup(w http.ResponseWriter, r *http.Request) {
 	// context so writeIMSIAudit deep in the cascade can tag rows
 	// without a signature change every layer of the way down.
 	ctx := customer.WithIncidentID(r.Context(), strings.TrimSpace(q.Get("incident_id")))
+	// Optional ?connection= overrides the primary so the Customer 360
+	// dropdown ("search on prod / sit / …") actually targets the
+	// connection the operator picked. Empty string falls back to
+	// the primary inside LookupProdOn.
+	connOverride := strings.TrimSpace(q.Get("connection"))
 	// Multi-DB resolver when a manager is available; falls back to the
 	// legacy single-pool path for any caller that isn't using the
 	// prod cluster (e.g. the merged-DB SIT install).
-	view, err := customer.LookupProd(ctx, a.CustomerMgr, a.Log, mode, value)
+	view, err := customer.LookupProdOn(ctx, a.CustomerMgr, a.Log, connOverride, mode, value)
 	// Activity feed: emit one row per successful lookup so the
 	// Dashboard card ticks up. Only log successful lookups with a
 	// resolved identity — candidate pickers and 404s aren't

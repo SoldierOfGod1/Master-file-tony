@@ -39,6 +39,15 @@ const (
 // LookupProd is the multi-DB resolver. Supply a *Manager; it routes per
 // DB from that. Looks up by phone | email | id.
 func LookupProd(ctx context.Context, mgr *Manager, log *slog.Logger, mode, value string) (*Customer360, error) {
+	return LookupProdOn(ctx, mgr, log, "", mode, value)
+}
+
+// LookupProdOn is the connection-explicit form of LookupProd.
+// Pass an empty connID to fall back to the primary; the route layer
+// passes through whatever the operator picked in the Customer 360
+// connection dropdown so a SIT-default install can still target Prod
+// (or vice-versa) without flipping the global primary.
+func LookupProdOn(ctx context.Context, mgr *Manager, log *slog.Logger, connID, mode, value string) (*Customer360, error) {
 	value = strings.TrimSpace(value)
 	if value == "" {
 		return nil, fmt.Errorf("empty lookup value")
@@ -47,13 +56,16 @@ func LookupProd(ctx context.Context, mgr *Manager, log *slog.Logger, mode, value
 		return nil, errors.New("customer manager not configured")
 	}
 
-	// Resolve the primary connection so we know which connection id to
-	// use when switching databases for downstream calls.
-	_, primary, err := mgr.PrimaryPool(ctx)
-	if err != nil {
-		return nil, fmt.Errorf("resolve primary: %w", err)
+	// Resolve the connection: explicit override wins, otherwise fall
+	// back to whatever the deployment marks as primary.
+	connID = strings.TrimSpace(connID)
+	if connID == "" {
+		_, primary, err := mgr.PrimaryPool(ctx)
+		if err != nil {
+			return nil, fmt.Errorf("resolve primary: %w", err)
+		}
+		connID = primary.ID
 	}
-	connID := primary.ID
 
 	ctx, cancel := context.WithTimeout(ctx, 25*time.Second)
 	defer cancel()
