@@ -1,6 +1,7 @@
 package server
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
 	"regexp"
@@ -151,16 +152,65 @@ func (a *API) handleSetPrimary(w http.ResponseWriter, r *http.Request) {
 	jsonOK(w, map[string]string{"primary": id})
 }
 
-// handleTestConnection pings the DB behind the given id. Returns 200 with
-// a one-line OK message on success, 502 with the real pg error on failure.
+// handleTestConnection pings the DB behind the given id. Returns 200
+// with a one-line OK on success, 502 with the underlying error on
+// failure. Dispatches by driver:
+//   - postgres   → customer.Manager pgxpool ping
+//   - clickhouse → darknoc.ClickHouseAdapter.TestConnection (HTTP)
+//   - grafana    → darknoc.GrafanaProxy.TestConnection (Bearer + /api/user)
+//
+// The customer.Manager path was the original implementation and only
+// understood postgres — testing a clickhouse or grafana row through
+// it returned ErrNotConfigured / ErrClickHouseUnsupported and made
+// the Settings UI report "test failed — see backend log" with no
+// useful detail. This dispatcher fixes that.
 func (a *API) handleTestConnection(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
-	if a.CustomerMgr == nil {
-		jsonError(w, http.StatusServiceUnavailable, "customer manager not initialised")
+	c, ok, err := a.Store.GetConnection(id)
+	if err != nil {
+		jsonError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
-	if err := a.CustomerMgr.TestConnection(r.Context(), id); err != nil {
-		jsonError(w, http.StatusBadGateway, err.Error())
+	if !ok {
+		jsonError(w, http.StatusNotFound, "connection "+id+" not found")
+		return
+	}
+	switch strings.ToLower(strings.TrimSpace(c.Driver)) {
+	case "postgres", "":
+		if a.CustomerMgr == nil {
+			jsonError(w, http.StatusServiceUnavailable, "customer manager not initialised")
+			return
+		}
+		if err := a.CustomerMgr.TestConnection(r.Context(), id); err != nil {
+			jsonError(w, http.StatusBadGateway, err.Error())
+			return
+		}
+	case "clickhouse":
+		// Cast through the Connector interface to the concrete
+		// adapter so we can call TestConnection on a fresh row
+		// (not the cached `clickhouse-prod`).
+		ch, isCH := a.DarkNoc.(interface {
+			TestConnection(ctx context.Context, c store.Connection) error
+		})
+		if !isCH {
+			jsonError(w, http.StatusServiceUnavailable, "clickhouse adapter not initialised")
+			return
+		}
+		if err := ch.TestConnection(r.Context(), c); err != nil {
+			jsonError(w, http.StatusBadGateway, err.Error())
+			return
+		}
+	case "grafana":
+		if a.DarkNocGrafana == nil {
+			jsonError(w, http.StatusServiceUnavailable, "grafana proxy not initialised")
+			return
+		}
+		if err := a.DarkNocGrafana.TestConnection(r.Context(), c); err != nil {
+			jsonError(w, http.StatusBadGateway, err.Error())
+			return
+		}
+	default:
+		jsonError(w, http.StatusBadRequest, "unsupported driver: "+c.Driver)
 		return
 	}
 	jsonOK(w, map[string]string{"id": id, "status": "ok"})

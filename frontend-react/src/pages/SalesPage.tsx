@@ -8,7 +8,7 @@
    rest of Command Centre.
    ============================================================ */
 
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import {
   TrendingUp, Wifi, Radio, Phone, Store,
   ArrowUpRight, ArrowDownRight, Truck, Package, CheckCircle2, XCircle,
@@ -26,7 +26,6 @@ import {
   type TrendPoint,
   type MTDProgress,
   type CallCentreTrendPoint,
-  type BillRunErrorBucket,
   type PaymentStatusBucket,
 } from '../api/sales';
 import hudStyles from '../theme/hud.module.css';

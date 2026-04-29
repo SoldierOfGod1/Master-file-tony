@@ -4,6 +4,8 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"os"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -137,18 +139,28 @@ func (p *Poller) tick(parent context.Context) {
 	// then swap to the product db. Using PrimaryPool directly gives you
 	// whichever db the connection was seeded with (usually `postgresdb`)
 	// which doesn't contain product.product_order.
-	_, primaryConn, err := p.mgr.PrimaryPool(ctx)
-	if err != nil {
-		p.log.Error("sales poll: no primary connection", "error", err)
-		return
+	//
+	// SALES_POLLER_CONNECTION_ID env var overrides the primary so an
+	// operator running a SIT-default install can still target prod for
+	// sales — Loop / rainOne CTEs only have a known-good schema on prod
+	// (e.g. product.product_order_item.product_offering_ref_id is a
+	// prod-only column; SIT errors with SQLSTATE 42703).
+	connID := strings.TrimSpace(os.Getenv("SALES_POLLER_CONNECTION_ID"))
+	if connID == "" {
+		_, primaryConn, err := p.mgr.PrimaryPool(ctx)
+		if err != nil {
+			p.log.Error("sales poll: no primary connection", "error", err)
+			return
+		}
+		connID = primaryConn.ID
 	}
-	pool, _, err := p.mgr.PoolByIDWithDB(ctx, primaryConn.ID, "product")
+	pool, _, err := p.mgr.PoolByIDWithDB(ctx, connID, "product")
 	if err != nil {
-		p.log.Error("sales poll: product pool unavailable", "error", err)
+		p.log.Error("sales poll: product pool unavailable", "error", err, "connection_id", connID)
 		return
 	}
 	// The test-email list lookup targets party.individual — different db.
-	partyPool, _, err := p.mgr.PoolByIDWithDB(ctx, primaryConn.ID, "party")
+	partyPool, _, err := p.mgr.PoolByIDWithDB(ctx, connID, "party")
 	if err != nil {
 		p.log.Warn("sales poll: party pool unavailable — using empty test-email list", "error", err)
 		partyPool = nil

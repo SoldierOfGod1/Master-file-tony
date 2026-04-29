@@ -31,8 +31,27 @@ type Connection struct {
 }
 
 // Filled returns true if the connection has enough fields to open a pool.
+// Per-driver requirements differ — Postgres needs an explicit database
+// name, ClickHouse defaults to `default` when one isn't given (matches
+// DBeaver), Grafana is a single-tenant HTTP API where only the URL +
+// token matter. Treating the postgres requirement as universal made
+// every ClickHouse and Grafana row light up amber even when fully
+// configured.
 func (c Connection) Filled() bool {
-	return c.Host != "" && c.Port != "" && c.User != "" && c.Password != "" && c.Database != ""
+	switch c.Driver {
+	case "clickhouse":
+		// host + user + password are enough; port has a sane default
+		// for the HTTP interface (8123/8443 by ssl_mode), database is
+		// optional ("" → ClickHouse routes to `default`).
+		return c.Host != "" && c.User != "" && c.Password != ""
+	case "grafana":
+		// Grafana service-account token sits in Password. Host is
+		// the base URL. Everything else is unused.
+		return c.Host != "" && c.Password != ""
+	default:
+		// Postgres + future drivers — keep the strict check.
+		return c.Host != "" && c.Port != "" && c.User != "" && c.Password != "" && c.Database != ""
+	}
 }
 
 // MaskedPassword returns the password masked for display. Kept here so all
@@ -105,8 +124,16 @@ func (s *Store) UpsertConnection(c Connection) error {
 	found := false
 	for i, existing := range conns {
 		if existing.ID == c.ID {
-			// Treat a masked password as "no change" so re-saves don't wipe it.
-			if isPasswordMasked(c.Password) {
+			// Treat masked OR empty incoming password as "no change"
+			// so re-saves don't wipe it. The frontend sends a patch
+			// without the password key when the user leaves the
+			// password field blank — JSON deserializes that into the
+			// zero value (""). Without this guard, every Save from
+			// the form would silently overwrite the stored password
+			// with empty string. Symptom: ClickHouse / Postgres
+			// returns "password is incorrect" because the saved
+			// password got nuked by the previous Save click.
+			if c.Password == "" || isPasswordMasked(c.Password) {
 				c.Password = existing.Password
 			}
 			conns[i] = c

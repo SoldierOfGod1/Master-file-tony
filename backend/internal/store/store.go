@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 
 	_ "modernc.org/sqlite"
 )
@@ -26,7 +27,23 @@ func New(dbPath string, log *slog.Logger) (*Store, error) {
 		return nil, err
 	}
 
-	db.SetMaxOpenConns(1)
+	// SQLite is in WAL mode (DSN above) so concurrent readers are
+	// safe and a single writer can run alongside them. Capping the
+	// pool at 1 — as we used to — turned every endpoint that touches
+	// SQLite into a queue: with the DB monitor + chat buffer + alert
+	// sink + sales poll + UI fetches all in flight at once, a single
+	// 600s request tail blocked the whole server (see /api/v1/connections,
+	// /platforms/databases, /platforms/incidents stacking up to 9-10
+	// minute durations in the log).
+	//
+	// Allow up to 8 concurrent connections — well above the
+	// busy-write contention threshold for our workload but small
+	// enough that SQLite's lock contention stays bounded. Idle
+	// connections are kept warm so the next request doesn't pay
+	// the dial cost.
+	db.SetMaxOpenConns(8)
+	db.SetMaxIdleConns(4)
+	db.SetConnMaxIdleTime(5 * time.Minute)
 
 	s := &Store{DB: db, Log: log}
 	if err := s.migrate(); err != nil {

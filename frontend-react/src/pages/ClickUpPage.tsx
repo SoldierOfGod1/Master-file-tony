@@ -209,13 +209,26 @@ function priorityColor(p?: string): string {
   }
 }
 
-function TaskCard({ task }: { readonly task: ClickUpTask }) {
+function TaskCard({
+  task,
+  onLink,
+}: {
+  readonly task: ClickUpTask;
+  readonly onLink: (task: ClickUpTask) => void;
+}) {
   return (
-    <a className={styles.taskCard} href={task.url} target="_blank" rel="noreferrer">
-      <div className={styles.taskCardHead}>
+    <div className={styles.taskCard}>
+      <a
+        className={styles.taskCardHead}
+        href={task.url}
+        target="_blank"
+        rel="noreferrer"
+        title="Open in ClickUp"
+        style={{ textDecoration: 'none', color: 'inherit', display: 'flex', alignItems: 'center', gap: 6 }}
+      >
         <span className={styles.taskTitle}>{task.name}</span>
         <ExternalLink size={10} className={styles.taskExt} />
-      </div>
+      </a>
       <div className={styles.taskMeta}>
         {task.priority && <HudChip color={priorityColor(task.priority)}>{task.priority}</HudChip>}
         {(task.tags ?? []).slice(0, 3).map((t) => (
@@ -224,8 +237,27 @@ function TaskCard({ task }: { readonly task: ClickUpTask }) {
         {(task.assignees ?? []).slice(0, 2).map((a) => (
           <span key={a} className={styles.assignee}>@{a}</span>
         ))}
+        <button
+          type="button"
+          onClick={(e) => { e.preventDefault(); e.stopPropagation(); onLink(task); }}
+          title="Link this task to a project"
+          style={{
+            marginLeft: 'auto',
+            background: 'transparent',
+            border: '1px solid #00f0ff66',
+            color: '#00f0ff',
+            fontFamily: 'inherit',
+            fontSize: 9,
+            lineHeight: 1,
+            padding: '2px 6px',
+            cursor: 'pointer',
+            borderRadius: 2,
+            textTransform: 'uppercase',
+            letterSpacing: '0.06em',
+          }}
+        >Link →</button>
       </div>
-    </a>
+    </div>
   );
 }
 
@@ -251,6 +283,12 @@ export default function ClickUpPage() {
   const [updatingId, setUpdatingId] = useState<string | null>(null);
   const [editingProject, setEditingProject] = useState<Project | null>(null);
   const [creatingNew, setCreatingNew] = useState(false);
+  // ---- Ad-hoc → project linking ----
+  // When the operator clicks "Link →" on an ad-hoc card we open a
+  // modal listing projects without a clickup_task_id (so the link
+  // can't accidentally overwrite an existing mapping).
+  const [linkingTask, setLinkingTask] = useState<ClickUpTask | null>(null);
+  const [linking, setLinking] = useState(false);
 
   // ---- Data loaders ----
   const reloadTasks = useCallback(async () => {
@@ -327,6 +365,35 @@ export default function ClickUpPage() {
     setCreatingNew(false);
     await refreshAll();
   }, [refreshAll]);
+
+  // Open the picker for an ad-hoc task. The actual link happens in
+  // confirmLink once a project is chosen.
+  const handleLinkRequest = useCallback((task: ClickUpTask) => {
+    setLinkingTask(task);
+  }, []);
+
+  // Persist the link: stamp the chosen project's clickup_task_id
+  // with the task id. The task disappears from the ad-hoc list on the
+  // next render because the linkedIds Set now contains it.
+  const confirmLink = useCallback(async (project: Project) => {
+    if (!linkingTask) return;
+    setLinking(true);
+    try {
+      await updateProject(project.id, { clickupTaskId: linkingTask.id });
+      setLinkingTask(null);
+      await refreshAll();
+    } finally {
+      setLinking(false);
+    }
+  }, [linkingTask, refreshAll]);
+
+  // Projects that don't yet have a ClickUp task attached. Filtered
+  // here so the modal can show a short list rather than a 14-row
+  // dropdown including already-linked projects.
+  const linkableProjects = useMemo(
+    () => projects.filter((p) => !p.clickupTaskId),
+    [projects],
+  );
 
   const handleSyncAll = useCallback(async () => {
     setSyncing(true);
@@ -544,7 +611,7 @@ export default function ClickUpPage() {
                   {list.length === 0 ? (
                     <div className={styles.dropHint}>// no tasks</div>
                   ) : (
-                    list.map((t) => <TaskCard key={t.id} task={t} />)
+                    list.map((t) => <TaskCard key={t.id} task={t} onLink={handleLinkRequest} />)
                   )}
                 </div>
               </HudPanel>
@@ -552,6 +619,56 @@ export default function ClickUpPage() {
           })}
         </div>
       )}
+
+      {/* ---- Link-to-project modal ---- */}
+      <Modal
+        isOpen={linkingTask !== null}
+        onClose={() => setLinkingTask(null)}
+        title={linkingTask ? `Link "${linkingTask.name}" to a project` : 'Link to project'}
+      >
+        <div className={styles.form}>
+          <div className={styles.field} style={{ fontSize: 11, opacity: 0.8 }}>
+            Pick a project to attach this ClickUp task to. Only projects without a
+            linked task are shown — link is one-to-one.
+          </div>
+          {linkableProjects.length === 0 ? (
+            <div className={styles.empty}>
+              // every project already has a ClickUp task — unlink one first via Edit
+            </div>
+          ) : (
+            <div style={{ display: 'grid', gap: 6, maxHeight: 360, overflowY: 'auto' }}>
+              {linkableProjects.map((p) => (
+                <button
+                  key={p.id}
+                  type="button"
+                  disabled={linking}
+                  onClick={() => void confirmLink(p)}
+                  style={{
+                    textAlign: 'left',
+                    background: 'transparent',
+                    border: '1px solid #00f0ff44',
+                    color: 'inherit',
+                    padding: '8px 10px',
+                    cursor: linking ? 'wait' : 'pointer',
+                    borderRadius: 3,
+                    fontFamily: 'inherit',
+                  }}
+                >
+                  <div style={{ fontWeight: 600 }}>{p.name}</div>
+                  <div style={{ fontSize: 10, opacity: 0.7, marginTop: 2 }}>
+                    {p.status} · {p.priority ?? 'normal'}
+                  </div>
+                </button>
+              ))}
+            </div>
+          )}
+          <div className={styles.actions}>
+            <button type="button" className={styles.cancel} onClick={() => setLinkingTask(null)} disabled={linking}>
+              Cancel
+            </button>
+          </div>
+        </div>
+      </Modal>
 
       {/* ---- Create-task modal ---- */}
       <Modal

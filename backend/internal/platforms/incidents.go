@@ -335,3 +335,18 @@ func ResolveIncident(ctx context.Context, db *sql.DB, id int64, note string) err
 	)
 	return nil
 }
+
+// ResolveAlert manually closes an open service_alerts row. Mirrors
+// the auto-resolve path in Emit() but driven by the operator: the
+// Alert Center "× Resolve" button calls this when an alert is stale
+// (cause is gone but the underlying service hasn't fired a
+// 'recovered' Emit). No-op on unknown id; rows that are already
+// resolved are left alone so the original resolved_at is preserved.
+func ResolveAlert(ctx context.Context, db *sql.DB, id int64) error {
+	now := time.Now().UTC().Format(time.RFC3339Nano)
+	_, err := db.ExecContext(ctx,
+		`UPDATE service_alerts SET state='resolved', resolved_at=? WHERE id=? AND state='open'`,
+		now, id,
+	)
+	return err
+}

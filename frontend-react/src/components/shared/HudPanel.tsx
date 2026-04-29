@@ -11,6 +11,10 @@ import hudStyles from '../../theme/hud.module.css';
 export interface HudPanelProps {
   /** Uppercase Orbitron title in the header strip. */
   readonly title: string;
+  /** Small line under the title. Page-level explainer for the panel. */
+  readonly subtitle?: string;
+  /** Lucide / SVG icon rendered next to the title. */
+  readonly icon?: ReactNode;
   /** Optional node rendered on the left of the title — typically a <StatusLed>. */
   readonly leading?: ReactNode;
   /** Optional node rendered on the right of the title — typically a <Chip> with a count. */
@@ -29,6 +33,8 @@ export interface HudPanelProps {
 
 export default function HudPanel({
   title,
+  subtitle,
+  icon,
   leading,
   meta,
   children,
@@ -48,9 +54,15 @@ export default function HudPanel({
     >
       <div className={hudStyles.panelHeader}>
         {leading}
+        {icon && <span style={{ display: 'inline-flex', alignItems: 'center', marginRight: 4, opacity: 0.85 }}>{icon}</span>}
         <span className={hudStyles.panelTitle}>{title}</span>
         {meta && <span className={hudStyles.panelMeta}>{meta}</span>}
       </div>
+      {subtitle && (
+        <div style={{ padding: '0 10px 6px', fontSize: 10, opacity: 0.7, letterSpacing: '0.04em' }}>
+          {subtitle}
+        </div>
+      )}
       <div className={hudStyles.panelBody}>{children}</div>
       {footer && <div className={hudStyles.panelFooter}>{footer}</div>}
     </div>

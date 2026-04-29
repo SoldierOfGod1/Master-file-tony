@@ -286,19 +286,21 @@ export function CommandCentreProvider({ children }: ProviderProps) {
         dispatch({ type: 'SET_OFFICE', payload: payload as OfficeData });
         break;
       default:
-        // Chat events are handled by ChatPage directly — ignore here.
-        if (
-          type === 'chat.stream' ||
-          type === 'chat.complete' ||
-          type === 'chat.error'
-        ) {
-          break;
-        }
-        // Unrecognised message type — refresh everything
-        void refreshAll();
+        // Unrecognised message types are NO-OPs.
+        //
+        // The backend bus emits a long tail of typed events the
+        // frontend doesn't currently listen for: project.update,
+        // project.delete, agent.status, customer (feed.Publish),
+        // chat.stream/complete/error, alert.resolve, etc. Falling
+        // through to refreshAll() here turned every one of those into
+        // a 15-endpoint parallel re-fetch — including slow Axiom
+        // queries — which froze the UI on every tab switch and on
+        // every backend-side mutation. Add explicit cases above when
+        // a payload is genuinely needed; otherwise the page-level
+        // useAutoRefresh hooks already pick up the new state.
         break;
     }
-  }, [lastMessage, refreshAll]);
+  }, [lastMessage]);
 
   const value: CommandCentreContextValue = {
     state,

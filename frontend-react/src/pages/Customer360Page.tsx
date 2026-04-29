@@ -39,6 +39,8 @@ import {
   lookupByPhone,
   getIMSIOverride,
   setIMSIOverride,
+  getUsageSummary,
+  type UsageSummary,
 } from '../api/customer';
 import { listConnections, type DBConnection } from '../api/connections';
 import type {
@@ -446,6 +448,18 @@ function ExtrasColumn({ view }: { readonly view: Customer360 }) {
           ))
         )}
       </HudPanel>
+
+      {/* Live Usage Overview from rain Axiom HTTP API. Sits under
+          Chargebacks so the operator sees the customer-summary
+          stack (subscriptions → tickets → chargebacks → usage →
+          contacts) without scrolling past the SIM Diagnostics list. */}
+      <UsageOverviewLivePanel view={view} />
+
+      {/* Contact Channels — moved here from the left column at
+          operator request so the address / phone / email block
+          sits inside the customer-summary stack right under the
+          headline usage numbers. */}
+      <ContactsPanel view={view} />
     </>
   );
 }
@@ -887,79 +901,174 @@ function productStateColor(state: string): string {
 }
 
 /* ---- Usage panel (policy + quota per msisdn) ---- */
-/* ---- CDR Usage panel — real GPRS data consumption from Athena ---- */
-/* ---- Usage Overview panel — 4-tile roll-up per SIM ----
-   Mirrors the Grafana "Usage Overview" dashboard: Total / Avg Daily
-   / Active Days / Peak Daily. Because we already pull per-IMSI ·
-   per-day GB aggregation into `cdr_usage`, the 4 SQL statements in
-   the spec collapse to 4 one-pass reductions over that array — no
-   extra Athena queries needed.
-   Renders per MSISDN so a customer with multiple SIMs gets one
-   strip per device, just like Grafana. */
-function CDRUsageOverviewPanel({ view }: { readonly view: Customer360 }) {
-  const rows = view.cdr_usage ?? [];
-  if (rows.length === 0) {
-    // Same "not wired / no data" state as the detailed panel —
-    // the overview depends on the same upstream query.
+/* ---- Usage Overview LIVE — pulls from rain Axiom HTTP API ----
+   Replaces the Athena-driven Overview as the primary tile. Hits
+   /api/v1/customer/usage/summary?msisdn=<X> for every SIM the
+   customer has and renders the 4-KPI strip exactly like the
+   Greenshot mock (red Total / blue Avg / purple Active Days /
+   orange Peak). Source is api.sit.rain.co.za, not Athena —
+   results are real-time, no S3 token expiry. */
+function UsageOverviewLivePanel({ view }: { readonly view: Customer360 }) {
+  // Collect every identifier we know for this customer that the
+  // upstream API will accept. The API param is named `msisdn` but
+  // also accepts IMSI (the rain endpoint is liberal). De-dupe so
+  // a customer with one SIM doesn't trigger two identical fetches.
+  const ids = useMemo(() => {
+    const out = new Set<string>();
+    for (const u of view.usage ?? []) {
+      if (u.msisdn) out.add(u.msisdn);
+    }
+    for (const s of view.sim_diagnostics ?? []) {
+      if (s.imsi) out.add(String(s.imsi));
+    }
+    return Array.from(out).slice(0, 5); // cap at 5 to avoid runaway fetches
+  }, [view]);
+
+  const [byID, setByID] = useState<Record<string, UsageSummary | null>>({});
+  const [loading, setLoading] = useState(false);
+
+  useEffect(() => {
+    if (ids.length === 0) {
+      setByID({});
+      return;
+    }
+    let cancelled = false;
+    setLoading(true);
+    void Promise.all(
+      ids.map(async (id) => [id, await getUsageSummary(id)] as const),
+    ).then((pairs) => {
+      if (cancelled) return;
+      const next: Record<string, UsageSummary | null> = {};
+      for (const [id, s] of pairs) next[id] = s;
+      setByID(next);
+      setLoading(false);
+    });
+    return () => { cancelled = true; };
+  }, [ids]);
+
+  if (ids.length === 0) {
     return null;
   }
-  // Group per SIM. Grafana's dashboard is single-IMSI-scoped; we
-  // may have 2-3 SIMs for a customer so we emit one tile-row per
-  // SIM, keyed on MSISDN (falling back to IMSI).
-  const byKey = new Map<string, { imsi: string; msisdn: string; days: Map<string, number> }>();
-  for (const r of rows) {
-    const key = r.msisdn || r.imsi || '(unknown)';
-    let entry = byKey.get(key);
-    if (!entry) {
-      entry = { imsi: r.imsi, msisdn: r.msisdn, days: new Map() };
-      byKey.set(key, entry);
-    }
-    entry.days.set(r.date, (entry.days.get(r.date) ?? 0) + (r.usage_gb || 0));
-  }
-  const sims = Array.from(byKey.entries())
-    .map(([k, v]) => {
-      const dailyVals = Array.from(v.days.values());
-      const total = dailyVals.reduce((a, b) => a + b, 0);
-      const activeDays = dailyVals.filter((d) => d > 0).length;
-      const avg = activeDays > 0 ? total / activeDays : 0;
-      const peak = dailyVals.length > 0 ? Math.max(...dailyVals) : 0;
-      return { key: k, ...v, total, avg, peak, activeDays };
-    })
-    .sort((a, b) => b.total - a.total);
+
+  // Sort SIMs by total descending so the most-used SIM renders first.
+  const sims = ids
+    .map((id) => ({ id, summary: byID[id] }))
+    .sort((a, b) => (b.summary?.total_bytes ?? 0) - (a.summary?.total_bytes ?? 0));
+
+  // Source provenance — read from the first non-null summary. The
+  // backend dispatches centrally based on USAGE_SOURCE env, so every
+  // SIM in a single page render shares one source. Guard for the
+  // legacy server that doesn't echo `source` yet — assume axiom-api.
+  const source: string =
+    sims.find((s) => s.summary?.source)?.summary?.source ?? 'axiom-api';
+  const sourceLabel = source === 'gaussdb' ? 'GaussDB DWS · PROD' : 'rain Axiom API';
+  // GaussDB chip green tint vs Axiom magenta — fast visual cue when
+  // the operator flips USAGE_SOURCE between environments.
+  const sourceChipColor = source === 'gaussdb' ? '#6ff2a0' : '#ff7de0';
 
   return (
     <HudPanel
       title="Usage Overview"
+      subtitle={`last 30 days · live from ${sourceLabel}`}
       accent="#ff7de0"
-      leading={<HudStatusLed color="#ff7de0" />}
-      meta={<HudChip color="#ff7de0">{sims.length} SIM{sims.length === 1 ? '' : 's'}</HudChip>}
+      leading={<HudStatusLed color="#ff7de0" animate={loading} />}
+      meta={
+        <>
+          <HudChip color={sourceChipColor}>from: {source}</HudChip>
+          <HudChip color="#ff7de0">{ids.length} SIM{ids.length === 1 ? '' : 's'}</HudChip>
+        </>
+      }
     >
-      {sims.map((s) => (
-        <div key={s.key} style={{ padding: '8px 6px', borderTop: '1px solid rgba(255,125,224,0.12)' }}>
+      {ids.length === 0 && (
+        <div style={{ padding: 10, fontSize: 11, opacity: 0.7 }}>
+          // no MSISDN/IMSI on this customer — paste known IMSIs below.
+        </div>
+      )}
+      {sims.map(({ id, summary }) => (
+        <div key={id} style={{
+          padding: '8px 6px',
+          borderTop: '1px solid rgba(255,125,224,0.12)',
+        }}>
           <div style={{
             fontSize: 10, opacity: 0.75, marginBottom: 6,
             fontFamily: 'var(--font-mono, monospace)',
+            display: 'flex', gap: 8, alignItems: 'baseline',
           }}>
-            <span style={{ color: '#00f0ff' }}>{s.msisdn || '(no msisdn)'}</span>
-            {s.imsi && <span style={{ marginLeft: 6, opacity: 0.6 }}>IMSI {s.imsi}</span>}
+            <span style={{ color: '#00f0ff' }}>{id}</span>
+            {summary && (
+              <span style={{ opacity: 0.6 }}>
+                {summary.first_day} → {summary.last_day}
+              </span>
+            )}
+            {!summary && !loading && (
+              <span style={{ color: '#ffaa00' }}>// no data returned</span>
+            )}
           </div>
           <div style={{
+            // Auto-fit so the 4 tiles render in one row when the
+            // panel sits in its own column (full page width), and
+            // wrap to 2×2 when the panel shares a row with SIM
+            // Diagnostics. Min tile width (140) keeps "1.74 GB" big
+            // text legible without horizontal scroll.
             display: 'grid',
-            gridTemplateColumns: 'repeat(auto-fit, minmax(min(140px, 100%), 1fr))',
+            gridTemplateColumns: 'repeat(auto-fit, minmax(140px, 1fr))',
             gap: 6,
           }}>
-            <OverviewTile label="Total Data Usage" value={fmtGB(s.total)} colour="#ff3355" tooltip="Sum of total_volume across every CDR row in the last 7d window." />
-            <OverviewTile label="Avg Daily Usage" value={fmtGB(s.avg)} colour="#00f0ff" tooltip="Total ÷ number of active days (days with any GPRS usage). Matches the Grafana AVG(daily) aggregation." />
-            <OverviewTile label="Active Days" value={String(s.activeDays)} colour="#c488ff" tooltip="Distinct days with GPRS usage in the window. COUNT(DISTINCT date_trunc('day', inserted_at))." />
-            <OverviewTile label="Peak Daily Usage" value={fmtGB(s.peak)} colour="#ffaa00" tooltip="Maximum single-day total. MAX over per-day SUM(total_volume)." />
+            <UsageKpiTile
+              label="Total Data Usage"
+              value={fmtBytes(summary?.total_bytes ?? 0)}
+              colour="#ff3355"
+              tooltip="Sum of bytes across the 30-day window."
+            />
+            <UsageKpiTile
+              label="Avg Daily Usage"
+              value={fmtBytes(summary?.avg_daily_bytes ?? 0)}
+              colour="#00f0ff"
+              tooltip="Total bytes ÷ active days. Zero when the SIM had no traffic."
+            />
+            <UsageKpiTile
+              label="Active Days"
+              value={String(summary?.active_days ?? 0)}
+              colour="#c488ff"
+              tooltip="Count of days where bytes > 0 in the 30-day window."
+            />
+            <UsageKpiTile
+              label="Peak Daily Usage"
+              value={fmtBytes(summary?.peak_daily_bytes ?? 0)}
+              colour="#ffaa00"
+              tooltip={summary?.peak_day ? `Peak on ${summary.peak_day}.` : 'Highest single-day byte total.'}
+            />
           </div>
         </div>
       ))}
+      {/* Manual IMSI override editor — kept here so an operator can
+          paste known IMSIs when the 3-pivot cascade misses, then the
+          Usage Overview repopulates from the override. Used to live
+          inside the now-deleted CDRUsagePanel. */}
+      {view.identity.id && <IMSIOverrideEditor customerID={view.identity.id} />}
     </HudPanel>
   );
 }
 
-function OverviewTile({ label, value, colour, tooltip }: {
+// fmtBytes renders a byte count in the most readable scale (B/KB/MB/GB/TB).
+// Uses 1000-based decimal (telco convention; 1 GB = 10^9 bytes), one
+// decimal place above MB. Always returns a string with a unit so the
+// tile never shows a bare number.
+function fmtBytes(n: number): string {
+  if (!Number.isFinite(n) || n <= 0) return '0 B';
+  const units = ['B', 'KB', 'MB', 'GB', 'TB', 'PB'];
+  let v = n;
+  let i = 0;
+  while (v >= 1000 && i < units.length - 1) {
+    v /= 1000;
+    i++;
+  }
+  if (i === 0) return `${Math.round(v)} ${units[i]}`;
+  if (i <= 2) return `${v.toFixed(0)} ${units[i]}`;
+  return `${v.toFixed(2)} ${units[i]}`;
+}
+
+function UsageKpiTile({ label, value, colour, tooltip }: {
   readonly label: string;
   readonly value: string;
   readonly colour: string;
@@ -969,23 +1078,28 @@ function OverviewTile({ label, value, colour, tooltip }: {
     <div
       title={tooltip}
       style={{
-        padding: '10px 12px',
-        borderLeft: `3px solid ${colour}`,
-        background: `linear-gradient(135deg, ${colour}22, ${colour}08)`,
-        borderRadius: 3,
+        padding: '14px 16px',
+        background: `linear-gradient(135deg, ${colour}, ${colour}cc)`,
+        borderRadius: 4,
         fontFamily: 'var(--font-mono, monospace)',
+        minHeight: 88,
+        display: 'flex',
+        flexDirection: 'column',
+        justifyContent: 'space-between',
       }}
     >
       <div style={{
-        fontSize: 9, opacity: 0.7,
-        textTransform: 'uppercase', letterSpacing: '0.08em',
-        marginBottom: 4,
-      }}>{label}</div>
+        fontSize: 10, opacity: 0.85, color: '#fff',
+        textTransform: 'capitalize', letterSpacing: '0.02em',
+      }}>
+        {label}
+      </div>
       <div style={{
-        fontSize: 24, lineHeight: 1.1,
-        color: colour,
+        fontSize: 32, lineHeight: 1.0,
+        color: '#fff',
         fontFamily: 'var(--font-display, Orbitron, monospace)',
-        textShadow: `0 0 8px ${colour}44`,
+        textShadow: '0 1px 2px rgba(0,0,0,0.4)',
+        fontWeight: 600,
       }}>
         {value}
       </div>
@@ -993,13 +1107,14 @@ function OverviewTile({ label, value, colour, tooltip }: {
   );
 }
 
-function fmtGB(gb: number): string {
-  if (gb >= 1) return `${gb.toFixed(2)} GB`;
-  const mb = gb * 1024;
-  if (mb >= 1) return `${mb.toFixed(0)} MB`;
-  const kb = mb * 1024;
-  return `${kb.toFixed(0)} KB`;
-}
+/* CDRUsageOverviewPanel + CDRUsagePanel + their helpers (OverviewTile,
+   fmtGB) deleted on 2026-04-29. Both pulled from view.cdr_usage which
+   was populated exclusively by the AWS Athena fetcher. Athena is
+   deprecated as the rain CDR source — UsageOverviewLivePanel reads
+   the rain Axiom HTTP API at /api/v1/customer/usage/summary?msisdn=X
+   directly and now lives in ExtrasColumn under Chargebacks. The
+   backend still defines the cdr_usage fetch but it's gated off by
+   default via CUSTOMER360_ATHENA_ENABLED — set =true to re-enable. */
 
 /* ---- Manual IMSI override editor ----
    When our 3-pivot IMSI resolver (billing-account → msisdn →
@@ -1103,66 +1218,6 @@ function IMSIOverrideEditor({ customerID, onSaved }: {
         </div>
       )}
     </div>
-  );
-}
-
-function CDRUsagePanel({ view }: { readonly view: Customer360 }) {
-  const rows = view.cdr_usage ?? [];
-  const status = (view.data_sources ?? []).find((s) => s.name === 'cdr_usage');
-  const byMsisdn = new Map<string, { total: number; days: typeof rows }>();
-  for (const r of rows) {
-    const k = r.msisdn || r.imsi || '(unknown)';
-    const cur = byMsisdn.get(k) ?? { total: 0, days: [] };
-    cur.total += r.usage_gb || 0;
-    cur.days = [...cur.days, r];
-    byMsisdn.set(k, cur);
-  }
-  const sims = Array.from(byMsisdn.entries()).sort((a, b) => b[1].total - a[1].total);
-  const grandTotal = sims.reduce((acc, [, v]) => acc + v.total, 0);
-  if (rows.length === 0) {
-    return (
-      <HudPanel
-        title="Data Usage · last 7d"
-        accent="#6ff2a0"
-        leading={<HudStatusLed color="#7cc6ff" animate={false} />}
-        meta={<HudChip color="#7cc6ff">{status?.state === 'error' ? 'athena unavailable' : 'no rows'}</HudChip>}
-      >
-        <div style={{ fontSize: 11, opacity: 0.7, padding: 6 }}>
-          // no Athena CDR rows returned for this customer's IMSIs.
-          {status?.error ? <div style={{ marginTop: 4, color: '#ff7b7b' }}>{status.error.slice(0, 180)}</div> : null}
-          {status?.latency_ms ? ` (probed in ${status.latency_ms}ms)` : ''}
-        </div>
-        {view.identity.id && <IMSIOverrideEditor customerID={view.identity.id} />}
-      </HudPanel>
-    );
-  }
-  return (
-    <HudPanel
-      title={`Data Usage · last 7d · ${grandTotal.toFixed(2)} GB`}
-      accent="#6ff2a0"
-      leading={<HudStatusLed color="#6ff2a0" />}
-      meta={<HudChip color="#6ff2a0">{sims.length} SIM{sims.length === 1 ? '' : 's'}</HudChip>}
-    >
-      {sims.map(([msisdn, v]) => (
-        <div key={msisdn} style={{
-          padding: '6px 8px', borderLeft: '2px solid #6ff2a055',
-          fontFamily: 'var(--font-mono, monospace)', fontSize: 11, marginBottom: 4,
-        }}>
-          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline' }}>
-            <span style={{ color: '#00f0ff' }}>{msisdn}</span>
-            <span style={{ color: '#6ff2a0', fontSize: 13 }}>{v.total.toFixed(2)} GB</span>
-          </div>
-          <div style={{ fontSize: 10, opacity: 0.7, marginTop: 2, display: 'flex', flexWrap: 'wrap', gap: 8 }}>
-            {v.days.slice(0, 10).map((d) => (
-              <span key={d.date + msisdn}>
-                {formatDate(d.date)} <span style={{ color: '#6ff2a0' }}>{d.usage_gb.toFixed(2)}</span>
-              </span>
-            ))}
-          </div>
-        </div>
-      ))}
-      {view.identity.id && <IMSIOverrideEditor customerID={view.identity.id} />}
-    </HudPanel>
   );
 }
 
@@ -2128,10 +2183,17 @@ export default function Customer360Page() {
               <BalancesPanel view={view} />
               <ProductsPanel view={view} />
               <SimDiagnosticsPanel view={view} />
-              <CDRUsageOverviewPanel view={view} />
-              <CDRUsagePanel view={view} />
+              {/* CDRUsageOverviewPanel + CDRUsagePanel removed —
+                  Athena was the only data source for them and we no
+                  longer query AWS Athena for CDR data. Live usage
+                  now sits in ExtrasColumn under Chargebacks via
+                  UsageOverviewLivePanel sourced from the rain Axiom
+                  HTTP API (api.sit.rain.co.za). */}
               <UsagePanel view={view} />
-              <ContactsPanel view={view} />
+              {/* ContactsPanel moved into ExtrasColumn below
+                  UsageOverviewLivePanel so the customer-summary
+                  stack (subs → tickets → chargebacks → usage →
+                  contacts) sits in one scroll-free column. */}
               <PaymentsPanel view={view} />
               <InvoicesPanel view={view} />
               <DeepLinksPanel view={view} />

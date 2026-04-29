@@ -7,8 +7,8 @@
 
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import {
-  Activity, AlertTriangle, Database, ExternalLink, ShieldCheck,
-  ShieldAlert, Clock, CheckCircle2, XCircle, Flame, BookOpen, RefreshCw,
+  AlertTriangle, Database, ExternalLink,
+  ShieldAlert, Clock, CheckCircle2, Flame, BookOpen,
 } from 'lucide-react';
 import HudPanel from '../components/shared/HudPanel';
 import HudSummaryStrip from '../components/shared/HudSummaryStrip';
@@ -21,6 +21,7 @@ import {
   getIncidentTimeline,
   ackIncident,
   resolveIncident,
+  resolveAlert,
   type PlatformStatus,
   type PlatformState,
   type DatabaseHealth,
@@ -331,7 +332,13 @@ function DatabaseHealthPanel({ dbs }: { readonly dbs: DatabaseHealth[] }) {
 }
 
 /* ---- Alert center ---- */
-function AlertCenter({ alerts }: { readonly alerts: StoredAlert[] }) {
+function AlertCenter({
+  alerts,
+  onResolve,
+}: {
+  readonly alerts: StoredAlert[];
+  readonly onResolve: (id: number) => void | Promise<void>;
+}) {
   const open = alerts.filter((a) => a.state === 'open');
   return (
     <HudPanel
@@ -355,6 +362,26 @@ function AlertCenter({ alerts }: { readonly alerts: StoredAlert[] }) {
                 <HudChip color={colour}>{a.severity.toUpperCase()}</HudChip>
                 <span style={{ color: colour }}>{a.service_id}</span>
                 <span style={{ fontSize: 10, opacity: 0.7, marginLeft: 'auto' }}>{fmtDate(a.created_at)}</span>
+                <button
+                  type="button"
+                  onClick={() => {
+                    if (window.confirm(`Resolve alert "${a.message}"?\n\nThis won't fix the cause — only flips state to resolved so it leaves the panel.`)) {
+                      void onResolve(a.id);
+                    }
+                  }}
+                  title="Resolve alert"
+                  style={{
+                    background: 'transparent',
+                    border: `1px solid ${colour}55`,
+                    color: colour,
+                    fontFamily: 'inherit',
+                    fontSize: 10,
+                    lineHeight: 1,
+                    padding: '2px 5px',
+                    cursor: 'pointer',
+                    borderRadius: 2,
+                  }}
+                >× resolve</button>
               </div>
               <div style={{ marginTop: 2 }}>{a.message}</div>
               {a.cause && <div style={{ fontSize: 10, opacity: 0.75, marginTop: 1 }}><b>cause:</b> {a.cause}</div>}
@@ -616,6 +643,10 @@ export default function ServicePage() {
     await refreshIncidents();
     await refreshAlerts();
   }, [refreshIncidents, refreshAlerts]);
+  const onResolveAlert = useCallback(async (id: number) => {
+    await resolveAlert(id);
+    await refreshAlerts();
+  }, [refreshAlerts]);
 
   return (
     <div className={hudStyles.page}>
@@ -654,7 +685,7 @@ export default function ServicePage() {
           <ServicesGrid rows={rows} />
           <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
             <DatabaseHealthPanel dbs={dbRows} />
-            <AlertCenter alerts={alertRows} />
+            <AlertCenter alerts={alertRows} onResolve={onResolveAlert} />
           </div>
         </div>
         <IncidentTimeline incidents={incidentRows} onAck={onAck} onResolve={onResolve} />

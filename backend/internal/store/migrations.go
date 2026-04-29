@@ -391,11 +391,15 @@ var migrations = []string{
 		winning_phase TEXT NOT NULL,
 		imsi_count INTEGER NOT NULL DEFAULT 0,
 		response_code INTEGER NOT NULL DEFAULT 200,
-		reason TEXT NOT NULL DEFAULT ''
+		reason TEXT NOT NULL DEFAULT '',
+		incident_id TEXT
 	)`,
 	`CREATE INDEX IF NOT EXISTS idx_imsi_audit_individual_at ON imsi_lookup_audit(individual_id, at DESC)`,
 	`CREATE INDEX IF NOT EXISTS idx_imsi_audit_at ON imsi_lookup_audit(at DESC)`,
 	`CREATE INDEX IF NOT EXISTS idx_imsi_audit_phase_at ON imsi_lookup_audit(winning_phase, at DESC)`,
+	// Phase D2 add-column for existing DBs that pre-date the schema bump.
+	// store.go's migrate() ignores "duplicate column" so this is idempotent.
+	`ALTER TABLE imsi_lookup_audit ADD COLUMN incident_id TEXT`,
 
 	// Phase B3 of the agent-orchestrator plan: per-user weekly
 	// budget cap. Empty user_id row holds the global default; per-

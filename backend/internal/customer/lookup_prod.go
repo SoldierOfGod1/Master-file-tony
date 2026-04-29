@@ -23,6 +23,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"os"
 	"strings"
 	"sync"
 	"time"
@@ -30,6 +31,24 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
+
+// athenaCDRFetchEnabled is the kill-switch for the legacy AWS Athena
+// CDR fetch. The rain Axiom HTTP API
+// (api.sit.rain.co.za/axiom/usage-online/fact-cdr-analytics/daily-usage)
+// replaces it as the canonical per-MSISDN usage source — Customer 360's
+// Usage Overview tile reads that directly. Athena fetch defaults OFF
+// so customer lookups don't pay the ~5s timeout when AWS creds are
+// expired or the network can't reach S3. Set
+// CUSTOMER360_ATHENA_ENABLED=true to opt back in.
+func athenaCDRFetchEnabled() bool {
+	v := strings.ToLower(strings.TrimSpace(os.Getenv("CUSTOMER360_ATHENA_ENABLED")))
+	switch v {
+	case "1", "true", "yes", "on":
+		return true
+	default:
+		return false
+	}
+}
 
 const (
 	primaryConnID = "axiom-prod" // fallback — overridden via manager primary
@@ -246,10 +265,19 @@ func LookupProdOn(ctx context.Context, mgr *Manager, log *slog.Logger, connID, m
 			return len(prods), nil
 		}},
 		{"cdr_usage", "athena", func(c context.Context) (int, error) {
-			// Actual GPRS data usage lives in Athena's
-			// iv_usage_cdr_detail, NOT in ralf.resource_policy
-			// (which is policy/quota metadata). Silent skip when
-			// Athena isn't configured.
+			// Operator deprecated AWS Athena as the CDR source — the
+			// rain Axiom HTTP API (api.sit.rain.co.za, exposed at
+			// /api/v1/customer/usage/summary) is now the canonical
+			// per-MSISDN usage source. Customer 360 reads it via
+			// the UsageOverviewLivePanel tile in ExtrasColumn.
+			//
+			// Skip Athena unless CUSTOMER360_ATHENA_ENABLED=true is
+			// explicitly set (kept for emergency rollback). Saves
+			// the ~5s timeout on every customer lookup when Athena
+			// creds are expired or AWS is unreachable.
+			if !athenaCDRFetchEnabled() {
+				return 0, nil
+			}
 			ath := mgr.AthenaUsage()
 			if ath == nil || !ath.Available() {
 				return 0, nil

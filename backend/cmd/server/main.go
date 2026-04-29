@@ -6,16 +6,20 @@ import (
 	"fmt"
 	"log/slog"
 	"os"
+	"strconv"
 	"strings"
 	"time"
 
 	"github.com/SoldierOfGod1/command-centre/internal/athena"
+	"github.com/SoldierOfGod1/command-centre/internal/axiomapi"
 	"github.com/SoldierOfGod1/command-centre/internal/chat"
 	"github.com/SoldierOfGod1/command-centre/internal/clickup"
 	"github.com/SoldierOfGod1/command-centre/internal/config"
 	"github.com/SoldierOfGod1/command-centre/internal/customer"
+	"github.com/SoldierOfGod1/command-centre/internal/darknoc"
 	"github.com/SoldierOfGod1/command-centre/internal/discord"
 	"github.com/SoldierOfGod1/command-centre/internal/event"
+	"github.com/SoldierOfGod1/command-centre/internal/gaussdb"
 	"github.com/SoldierOfGod1/command-centre/internal/logging"
 	"github.com/SoldierOfGod1/command-centre/internal/platforms"
 	"github.com/SoldierOfGod1/command-centre/internal/runner"
@@ -240,27 +244,82 @@ func main() {
 	streamBuf := chat.NewStreamBuffer()
 	streamBuf.AttachToBus(bus)
 
+	// Dark NOC — read-only ClickHouse fault telemetry + 41-agent
+	// reference registry. The registry is loaded once at startup
+	// from the operator's local DarkNoc.md (default
+	// ~/Downloads/DarkNoc.md). Routes are env-gated by
+	// DARK_NOC_ENABLED so a SIT install boots cleanly without one.
+	registry := darknoc.LoadRegistry(darknoc.DefaultRegistryPath())
+	if len(registry) > 0 {
+		log.Info("dark noc registry loaded", "count", len(registry))
+	}
+	darkNocAdapter := darknoc.NewClickHouseAdapter(db, log, registry)
+	// Optional rate-limit override via env (defaults to 10 rps / 20 burst).
+	if rps := envFloat("CLICKHOUSE_RATE_PER_SEC", 0); rps > 0 {
+		burst := envInt("CLICKHOUSE_RATE_BURST", int(rps*2))
+		darkNocAdapter.SetRateLimit(burst, rps)
+		log.Info("clickhouse rate limit", "rps", rps, "burst", burst)
+	}
+	darkNocGrafana := darknoc.NewGrafanaProxy(db, log)
+
+	// Axiom HTTP API client (rate-limited). AXIOM_API_BASE_URL is the
+	// only required env var — defaults to the SIT host so a stock
+	// install just works on the rain VPN. Token is optional; some
+	// endpoints are open from the VPN.
+	axiomAPIBase := os.Getenv("AXIOM_API_BASE_URL")
+	if axiomAPIBase == "" {
+		axiomAPIBase = "https://api.sit.rain.co.za"
+	}
+	axiomClient := axiomapi.NewClient(axiomAPIBase, log)
+	if tok := strings.TrimSpace(os.Getenv("AXIOM_API_TOKEN")); tok != "" {
+		axiomClient.SetToken(tok)
+	}
+	if rps := envFloat("AXIOM_API_RATE_PER_SEC", 0); rps > 0 {
+		burst := envInt("AXIOM_API_RATE_BURST", int(rps*2))
+		axiomClient.SetRateLimit(burst, rps)
+		log.Info("axiom-api rate limit", "rps", rps, "burst", burst)
+	}
+	log.Info("axiom-api client wired", "base", axiomAPIBase, "token_set", os.Getenv("AXIOM_API_TOKEN") != "")
+
+	// GaussDB DWS · PROD — alternate source for daily-CDR usage. The
+	// pgxpool is lazy (opens on first call), and the route handlers
+	// gate themselves on RAIN_SUPPORT_L2 + GAUSSDB_USAGE_ENABLED, so
+	// always wiring the client costs nothing at idle. PlaceholderSQL
+	// constant in internal/gaussdb/queries.go keeps the routes 503'd
+	// until the operator pastes the real SQL.
+	gaussClient := gaussdb.NewClient(db, log)
+	if id := strings.TrimSpace(os.Getenv("GAUSSDB_CONNECTION_ID")); id != "" {
+		gaussClient.SetConnection(id)
+	}
+	log.Info("gaussdb client wired",
+		"placeholder_sql", gaussdb.PlaceholderSQL,
+		"usage_source_default", strings.TrimSpace(os.Getenv("USAGE_SOURCE")))
+
 	api := &server.API{
-		DB:          db.DB,
-		Store:       db,
-		Log:         log,
-		Bus:         bus,
-		Hub:         hub,
-		QueueMgr:    queueMgr,
-		Dispatcher:  dispatcher,
-		ActiveConvs: chat.NewActiveConversations(),
-		AutoSummary: autoSummary,
-		StreamBuf:   streamBuf,
-		ClickUp:     cfg.ClickUp,
-		SyncEngine:  syncEngine,
-		CustomerMgr: customerMgr,
-		MCPHealth:   mcpHealth,
-		PlatformMon: platformMon,
-		DBHealth:    dbMon,
-		Runner:      runMgr,
-		SalesPoller: salesPoller,
-		Feed:        feedPub,
-		StartTime:   time.Now(),
+		DB:             db.DB,
+		Store:          db,
+		Log:            log,
+		Bus:            bus,
+		Hub:            hub,
+		QueueMgr:       queueMgr,
+		Dispatcher:     dispatcher,
+		ActiveConvs:    chat.NewActiveConversations(),
+		AutoSummary:    autoSummary,
+		StreamBuf:      streamBuf,
+		ClickUp:        cfg.ClickUp,
+		SyncEngine:     syncEngine,
+		CustomerMgr:    customerMgr,
+		MCPHealth:      mcpHealth,
+		PlatformMon:    platformMon,
+		DBHealth:       dbMon,
+		Runner:         runMgr,
+		SalesPoller:    salesPoller,
+		Feed:           feedPub,
+		DarkNoc:        darkNocAdapter,
+		DarkNocGrafana: darkNocGrafana,
+		AxiomAPI:       axiomClient,
+		Gaussdb:        gaussClient,
+		StartTime:      time.Now(),
 	}
 
 	// Liveness heartbeat — the /health/live handler returns 503 if
@@ -411,4 +470,32 @@ func (a *athenaUsageAdapter) UsageSince(ctx context.Context, imsis []int64) ([]c
 		})
 	}
 	return out, nil
+}
+
+// envFloat reads a positive float from the named env var. Returns
+// the supplied default when the var is empty or unparseable.
+func envFloat(name string, fallback float64) float64 {
+	raw := strings.TrimSpace(os.Getenv(name))
+	if raw == "" {
+		return fallback
+	}
+	v, err := strconv.ParseFloat(raw, 64)
+	if err != nil || v <= 0 {
+		return fallback
+	}
+	return v
+}
+
+// envInt reads a positive int from the named env var. Returns the
+// supplied default on empty / unparseable / non-positive.
+func envInt(name string, fallback int) int {
+	raw := strings.TrimSpace(os.Getenv(name))
+	if raw == "" {
+		return fallback
+	}
+	v, err := strconv.Atoi(raw)
+	if err != nil || v <= 0 {
+		return fallback
+	}
+	return v
 }

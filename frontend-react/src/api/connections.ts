@@ -45,9 +45,25 @@ export async function setPrimary(id: string): Promise<{ primary: string } | null
   return apiPost<{ primary: string }>(`/connections/${encodeURIComponent(id)}/primary`, {});
 }
 
-/** Returns ok=true on success or an error string from the server on failure. */
+/** Returns ok=true on success or the actual server error string on failure.
+ *  Uses fetch directly so we can read the 502 response body — apiPost
+ *  strips it, which is why we used to show the useless "see backend log"
+ *  message regardless of what the server actually said. */
 export async function testConnection(id: string): Promise<{ ok: true } | { ok: false; error: string }> {
-  const result = await apiPost<{ status: string }>(`/connections/${encodeURIComponent(id)}/test`, {});
-  if (result && result.status === 'ok') return { ok: true };
-  return { ok: false, error: 'test failed — see backend log' };
+  try {
+    const res = await fetch(`/api/v1/connections/${encodeURIComponent(id)}/test`, {
+      method: 'POST',
+      headers: { 'Accept': 'application/json' },
+    });
+    const body = (await res.json().catch(() => null)) as
+      | { success: boolean; data?: { status?: string }; error?: string }
+      | null;
+    if (res.ok && body?.success && body.data?.status === 'ok') {
+      return { ok: true };
+    }
+    const detail = body?.error || `HTTP ${res.status} ${res.statusText}`;
+    return { ok: false, error: detail };
+  } catch (err) {
+    return { ok: false, error: err instanceof Error ? err.message : 'network error' };
+  }
 }

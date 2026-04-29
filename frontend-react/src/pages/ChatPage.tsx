@@ -459,7 +459,7 @@ function TypingIndicator() {
    ================================================================ */
 
 export default function ChatPage() {
-  const { state } = useCommandCentre();
+  useCommandCentre();
 
   // Conversations
   const [conversations, setConversations] = useState<Conversation[]>([]);

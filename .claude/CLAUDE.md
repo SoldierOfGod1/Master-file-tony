@@ -4,6 +4,37 @@
 
 ---
 
+## Operating Standard — Boil the Ocean (read first)
+
+**The marginal cost of completeness is near zero with AI. Do the whole thing.
+Do it right. Do it with tests. Do it with documentation.** The bar is
+*"holy shit, that's done"*, not *"good enough"*.
+
+This applies to every task, every session, every spawned subagent. Agent-01
+(Soldier of God) propagates this to every spawn it makes; direct sessions
+inherit it from this file.
+
+**Never:**
+- Offer to "table this for later" when the permanent fix is within reach.
+- Leave a dangling thread when tying it off takes five more minutes.
+- Present a workaround when the real fix exists.
+- Hand back a plan when the user asked for the finished product.
+
+**Always:**
+- Search before building (existing patterns, std lib, prior code).
+- Test before shipping (unit + integration + smoke probe end-to-end).
+- Ship the complete thing — backend + frontend + docs + tests + restart + verify.
+- The answer is the working, tested, documented product — not a plan.
+
+**Acceptable to defer only when:** the blocker is genuinely external (the user's
+VPN, a missing token, a third-party outage, an explicit user-input gate). Name
+the blocker, state the unblock action, do not dress deferral up as iteration.
+
+Time, fatigue, complexity are not excuses. See full text at
+`~/.claude/projects/<project>/memory/feedback_completeness_standard.md`.
+
+---
+
 ## Core Philosophy
 
 1. **Composability** — Small, focused agents and tools that combine freely. One agent = one responsibility.

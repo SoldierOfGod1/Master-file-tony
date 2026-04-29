@@ -151,6 +151,14 @@ func readPluginAgents(pluginsRoot string) []Agent {
 		plugin := pluginNameFromPath(path, pluginsRoot)
 		for _, a := range readAgents(path, SourcePlugin) {
 			a.Plugin = plugin
+			// Make the ID unique per (source, plugin, filename) so two
+			// plugins shipping the same .md filename (e.g. several
+			// marketplaces ship code-reviewer.md) don't collide on the
+			// React key in AgentFleetPage. parseAgent doesn't know the
+			// plugin yet, so we patch the ID here.
+			if plugin != "" {
+				a.ID = string(SourcePlugin) + ":" + plugin + ":" + a.FileName
+			}
 			key := plugin + "::" + a.FileName
 			if _, ok := seenAgent[key]; ok {
 				continue

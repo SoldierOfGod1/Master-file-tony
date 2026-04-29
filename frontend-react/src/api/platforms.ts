@@ -136,6 +136,10 @@ export async function resolveIncident(id: number, note?: string): Promise<void> 
   await apiPost(`/platforms/incidents/${id}/resolve${qs}`, {});
 }
 
+export async function resolveAlert(id: number): Promise<void> {
+  await apiPost(`/platforms/alerts/${id}/resolve`, {});
+}
+
 /* Phase D2 — incident correlation rollup. Returns everything
    tagged with this incident_id (or numeric id, treated as a
    string) across conversations / approvals / IMSI audits / spend.

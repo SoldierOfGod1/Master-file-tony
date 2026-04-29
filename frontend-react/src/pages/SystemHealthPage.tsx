@@ -4,7 +4,7 @@
    ============================================================ */
 
 import { useCallback, useEffect, useMemo, useState } from 'react';
-import { Cpu, Database, Wifi, HeartPulse, Flame, AlertTriangle } from 'lucide-react';
+import { Cpu, Database, Wifi, HeartPulse, Flame } from 'lucide-react';
 import { useCommandCentre } from '../context/CommandCentreContext';
 import HudGauge from '../components/shared/HudGauge';
 import HudPanel from '../components/shared/HudPanel';

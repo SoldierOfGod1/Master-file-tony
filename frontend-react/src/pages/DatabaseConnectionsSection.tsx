@@ -131,13 +131,24 @@ function ConnectionCard({
 
   // Re-hydrate the local form state if the parent refreshes with new data
   // (e.g. after Save reloads the list).
+  //
+  // PASSWORD GOTCHA: the API returns the saved password as a masked
+  // string `••••XXXX` so it can be displayed safely. If we put that
+  // back into the input, the user types over what *looks* like dots
+  // but is actually the literal Unicode-bullet string in component
+  // state — their real password gets APPENDED, the save handler sees
+  // the leading bullets, decides "this is the mask, skip it", and
+  // the actual password never reaches the backend. That's the
+  // "Save → Test → 403" loop. Always start the password field blank;
+  // the backend already preserves the existing stored password when
+  // we send nothing for the password field.
   useEffect(() => {
     setLabel(conn.label);
     setHost(conn.host);
     setPort(conn.port);
     setDatabase(conn.database);
     setUser(conn.user);
-    setPassword(conn.password);
+    setPassword(isMasked(conn.password) ? '' : conn.password);
     setSslMode(conn.ssl_mode);
   }, [conn]);
 
@@ -151,7 +162,11 @@ function ConnectionCard({
       driver: conn.driver,
       ssl_mode: sslMode,
     };
-    if (!isMasked(password)) {
+    // Send the password ONLY when the user actually typed something.
+    // Empty + masked are both "no change" — the server keeps the
+    // existing stored password. Sending "" would clear it, which is
+    // never what the user means when they leave the field alone.
+    if (password !== '' && !isMasked(password)) {
       patch.password = password;
     }
     const result = await upsertConnection(patch as DBConnection);
@@ -277,13 +292,18 @@ function ConnectionCard({
               />
             </div>
             <div className={styles.field}>
-              <label className={styles.label}>Password</label>
+              <label className={styles.label}>
+                Password
+                <span style={{ fontWeight: 400, opacity: 0.55, marginLeft: 6, fontSize: 10 }}>
+                  // leave blank to keep saved value
+                </span>
+              </label>
               <input
                 type="password"
                 className={styles.input}
                 value={password}
                 onChange={(e) => setPassword(e.target.value)}
-                placeholder="paste password"
+                placeholder={conn.password ? '(saved — leave blank to keep)' : 'paste password'}
               />
             </div>
           </div>

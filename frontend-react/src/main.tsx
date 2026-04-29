@@ -32,6 +32,7 @@ const Customer360Page = lazy(() => import('./pages/Customer360Page'))
 const AxiomExplorerPage = lazy(() => import('./pages/AxiomExplorerPage'))
 const SalesPage = lazy(() => import('./pages/SalesPage'))
 const ServicePage = lazy(() => import('./pages/ServicePage'))
+const DarkNocPage = lazy(() => import('./pages/DarkNocPage'))
 
 /* Tiny inline fallback while a route chunk is loading. Stays
    inside the main layout via the Outlet so the chrome doesn't
@@ -81,6 +82,7 @@ const router = createBrowserRouter([
       { path: 'axiom', element: withSuspense(<AxiomExplorerPage />) },
       { path: 'sales', element: withSuspense(<SalesPage />) },
       { path: 'service', element: withSuspense(<ServicePage />) },
+      { path: 'dark-noc', element: withSuspense(<DarkNocPage />) },
       { path: 'settings', element: withSuspense(<SettingsPage />) },
     ],
   },

@@ -16,6 +16,8 @@ func RegisterAgentsRoutes(mux *http.ServeMux, api *API) {
 	mux.HandleFunc("GET /api/v1/agent-fleet/agents", api.handleFleetAgents)
 	mux.HandleFunc("GET /api/v1/agent-fleet/hooks", api.handleFleetHooks)
 	mux.HandleFunc("GET /api/v1/agent-fleet/rules", api.handleFleetRules)
+	mux.HandleFunc("GET /api/v1/agent-fleet/playbooks", api.handleFleetPlaybooks)
+	mux.HandleFunc("GET /api/v1/agent-fleet/harnesses", api.handleFleetHarnesses)
 	mux.HandleFunc("GET /api/v1/agent-fleet/file", api.handleFleetFile)
 	mux.HandleFunc("GET /api/v1/agent-fleet/memory", api.handleMemoryRead)
 	mux.HandleFunc("POST /api/v1/agent-fleet/memory", api.handleMemoryAppend)
@@ -71,6 +73,14 @@ func (a *API) handleFleetHooks(w http.ResponseWriter, r *http.Request) {
 
 func (a *API) handleFleetRules(w http.ResponseWriter, r *http.Request) {
 	jsonOK(w, a.newScanner().ListRules())
+}
+
+func (a *API) handleFleetPlaybooks(w http.ResponseWriter, r *http.Request) {
+	jsonOK(w, a.newScanner().ListPlaybooks())
+}
+
+func (a *API) handleFleetHarnesses(w http.ResponseWriter, r *http.Request) {
+	jsonOK(w, a.newScanner().ListHarnesses())
 }
 
 // handleFleetFile returns the raw contents of a sandboxed file. The scanner

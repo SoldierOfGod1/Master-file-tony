@@ -279,6 +279,91 @@ func (c *ToolCatalogue) register() {
 			// approval gate would block useful learning.
 			Run: c.runRemember(),
 		},
+		{
+			// Cybertron's read-only window into Dark NOC. Backend
+			// gates the underlying /api/v1/darknoc/* endpoints by
+			// DARK_NOC_ENABLED, so this tool degrades gracefully on
+			// SIT installs (operator just gets the "disabled" note).
+			Name: "darknoc_overview",
+			Description: "Cybertron / Dark NOC. Returns the current network HUD overview: " +
+				"24h fault counts, critical-fault counts, slice rollup, network trust score (0-100), " +
+				"and which data source produced it. Use for 'how's the network right now' questions.",
+			InputSchema: map[string]any{
+				"type":       "object",
+				"properties": map[string]any{},
+			},
+			Run: c.runGet("darknoc/overview", nil),
+		},
+		{
+			Name: "darknoc_faults",
+			Description: "Cybertron / Dark NOC. Lists the latest 50 faults from the last 24h: " +
+				"timestamp, severity, source service, region, technology (5G/4G/FWA/Loop), title, detail. " +
+				"Use to answer 'what just broke' or 'show me 5G CRITICAL alerts'.",
+			InputSchema: map[string]any{
+				"type":       "object",
+				"properties": map[string]any{},
+			},
+			Run: c.runGet("darknoc/faults", nil),
+		},
+		{
+			Name: "darknoc_registry",
+			Description: "Cybertron / Dark NOC. Returns the static reference list of 41 telecom-AI " +
+				"agents from the Capgemini Open Registry (RCA Master, SLA Guardian, Self-Healing Trigger " +
+				"Manager, etc.). Useful for 'is there an agent that does X' research, but the agents are " +
+				"NOT live at rain — this is a roadmap reference, not an inventory.",
+			InputSchema: map[string]any{
+				"type":       "object",
+				"properties": map[string]any{},
+			},
+			Run: c.runGet("darknoc/registry", nil),
+		},
+		{
+			Name: "clickhouse_schema",
+			Description: "Return the live ClickHouse schema (databases / tables / columns) the rain " +
+				"telemetry cluster currently exposes. Use this BEFORE composing any SQL query against " +
+				"ClickHouse so you don't hallucinate table or column names. Cached server-side for 10 " +
+				"minutes; cheap to call repeatedly.",
+			InputSchema: map[string]any{
+				"type":       "object",
+				"properties": map[string]any{},
+			},
+			Run: c.runGet("darknoc/catalogue", nil),
+		},
+		{
+			Name: "axiom_daily_usage",
+			Description: "Fetch the raw daily CDR usage series for a MSISDN from the rain Axiom HTTP " +
+				"API. Returns 30-day window with date[] + actualUsage{} + events{}. Use this when you " +
+				"need the per-day breakdown; for headline numbers prefer axiom_usage_summary which " +
+				"pre-computes total/avg/active-days/peak.",
+			InputSchema: map[string]any{
+				"type": "object",
+				"properties": map[string]any{
+					"msisdn": map[string]any{
+						"type":        "string",
+						"description": "Subscriber MSISDN. International format without leading +.",
+					},
+				},
+				"required": []string{"msisdn"},
+			},
+			Run: c.runGet("customer/usage/daily", []string{"msisdn"}),
+		},
+		{
+			Name: "axiom_usage_summary",
+			Description: "Headline data-usage rollup for one MSISDN over the last 30 days: total bytes, " +
+				"avg bytes per active day, active-days count, peak day + peak bytes, plus the full " +
+				"per-day series. This is the same data the Customer 360 'Usage Overview' tile shows.",
+			InputSchema: map[string]any{
+				"type": "object",
+				"properties": map[string]any{
+					"msisdn": map[string]any{
+						"type":        "string",
+						"description": "Subscriber MSISDN. International format without leading +.",
+					},
+				},
+				"required": []string{"msisdn"},
+			},
+			Run: c.runGet("customer/usage/summary", []string{"msisdn"}),
+		},
 	}
 }
 

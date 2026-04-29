@@ -30,6 +30,9 @@ export async function createMemory(
 
 export async function deleteMemory(
   id: number,
-): Promise<{ id: number; deleted: boolean } | null> {
-  return apiDelete<{ id: number; deleted: boolean }>(`/memory/${id}`);
+): Promise<{ id: number; deleted: boolean }> {
+  // apiDelete returns boolean (true on 2xx, false on error). Pack
+  // it into the legacy { id, deleted } shape so callers don't break.
+  const ok = await apiDelete(`/memory/${id}`);
+  return { id, deleted: ok };
 }

@@ -37,6 +37,23 @@ export interface FleetRule {
   source: Source;
 }
 
+export interface FleetPlaybook {
+  name: string;
+  path: string;
+  description: string;
+  source: Source;
+  plugin?: string;
+  size_bytes: number;
+}
+
+export interface FleetHarness {
+  name: string;
+  path: string;
+  kind: string;       // "settings" | "settings.local" | "mcp" | "claude.md"
+  source: Source;
+  size_bytes: number;
+}
+
 export async function listFleetAgents(): Promise<FleetAgent[]> {
   return (await apiGet<FleetAgent[]>('/agent-fleet/agents')) ?? [];
 }
@@ -47,6 +64,14 @@ export async function listFleetHooks(): Promise<FleetHook[]> {
 
 export async function listFleetRules(): Promise<FleetRule[]> {
   return (await apiGet<FleetRule[]>('/agent-fleet/rules')) ?? [];
+}
+
+export async function listFleetPlaybooks(): Promise<FleetPlaybook[]> {
+  return (await apiGet<FleetPlaybook[]>('/agent-fleet/playbooks')) ?? [];
+}
+
+export async function listFleetHarnesses(): Promise<FleetHarness[]> {
+  return (await apiGet<FleetHarness[]>('/agent-fleet/harnesses')) ?? [];
 }
 
 /** Fetch the raw contents of any agent/hook/rule file (sandboxed server-side). */

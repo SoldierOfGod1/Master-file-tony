@@ -10,7 +10,23 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"time"
 )
+
+// Process-wide TTL cache for the result of a full skills walk. The
+// scan over 1000+ plugin SKILL.md files is the main reason the
+// /api/v1/skills endpoint used to take 30-45 seconds — and the
+// frontend fetches it twice (React Strict Mode), so without a cache
+// the user pays for it twice in a row. 60-second TTL is short enough
+// that a freshly-installed plugin shows up on the next refresh, long
+// enough that tab navigation feels instant.
+var (
+	skillCacheMu      sync.Mutex
+	skillCacheRows    []Skill
+	skillCacheExpires time.Time
+)
+
+const skillCacheTTL = 60 * time.Second
 
 // Source identifies where a skill lives.
 type Source string
@@ -58,7 +74,20 @@ func New(projectDir string) *scanner {
 // ListSkills walks the known skill roots in parallel and returns the union.
 // Skills with identical names are de-duplicated; project wins over plugin
 // wins over global.
+//
+// Result is cached for skillCacheTTL — a follow-up call within the
+// window returns the previous result instantly. Call InvalidateCache()
+// after creating / editing / deleting a skill to force a fresh walk.
 func (s *scanner) ListSkills() []Skill {
+	skillCacheMu.Lock()
+	if skillCacheRows != nil && time.Now().Before(skillCacheExpires) {
+		out := make([]Skill, len(skillCacheRows))
+		copy(out, skillCacheRows)
+		skillCacheMu.Unlock()
+		return out
+	}
+	skillCacheMu.Unlock()
+
 	var (
 		wg   sync.WaitGroup
 		mu   sync.Mutex
@@ -132,7 +161,24 @@ func (s *scanner) ListSkills() []Skill {
 		}
 		return out[i].Name < out[j].Name
 	})
+
+	skillCacheMu.Lock()
+	skillCacheRows = make([]Skill, len(out))
+	copy(skillCacheRows, out)
+	skillCacheExpires = time.Now().Add(skillCacheTTL)
+	skillCacheMu.Unlock()
+
 	return out
+}
+
+// InvalidateCache drops the cached skill list — call after creating,
+// editing, or deleting a SKILL.md so the next /skills call sees the
+// change immediately rather than after the TTL expires.
+func InvalidateCache() {
+	skillCacheMu.Lock()
+	skillCacheRows = nil
+	skillCacheExpires = time.Time{}
+	skillCacheMu.Unlock()
 }
 
 // readSkillRoot walks a single skills root and returns parsed skills.

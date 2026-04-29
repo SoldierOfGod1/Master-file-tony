@@ -33,6 +33,7 @@ Thumbs.db
 
 # Logs
 *.log
+*.err
 
 # Per-persona git worktrees (#7 — Loop Operator isolation)
 .worktrees/

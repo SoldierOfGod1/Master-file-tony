@@ -19,6 +19,10 @@ func RegisterPlatformsRoutes(mux *http.ServeMux, api *API) {
 	mux.HandleFunc("GET /api/v1/platforms/health", api.handlePlatformsHealth)
 	mux.HandleFunc("GET /api/v1/platforms/databases", api.handlePlatformsDatabases)
 	mux.HandleFunc("GET /api/v1/platforms/alerts", api.handlePlatformsAlerts)
+	// Manual resolve for stuck alerts — services that haven't fired
+	// a 'recovered' Emit (watcher restarted, env disabled) leave rows
+	// open forever otherwise.
+	mux.HandleFunc("POST /api/v1/platforms/alerts/{id}/resolve", api.handlePlatformAlertResolve)
 	mux.HandleFunc("GET /api/v1/platforms/incidents", api.handlePlatformsIncidents)
 	mux.HandleFunc("POST /api/v1/platforms/incidents/{id}/ack", api.handlePlatformIncidentAck)
 	mux.HandleFunc("POST /api/v1/platforms/incidents/{id}/resolve", api.handlePlatformIncidentResolve)
@@ -198,6 +202,27 @@ func (a *API) handlePlatformIncidentResolve(w http.ResponseWriter, r *http.Reque
 	}
 	note := strings.TrimSpace(r.URL.Query().Get("note"))
 	if err := platforms.ResolveIncident(r.Context(), a.DB, id, note); err != nil {
+		jsonError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	jsonOK(w, map[string]any{"ok": true})
+}
+
+// handlePlatformAlertResolve manually closes a service_alerts row.
+// Only "open" alerts move; resolved ones keep their original
+// resolved_at. The frontend's × Resolve button hits this.
+func (a *API) handlePlatformAlertResolve(w http.ResponseWriter, r *http.Request) {
+	if a.DB == nil {
+		jsonError(w, http.StatusServiceUnavailable, "db unavailable")
+		return
+	}
+	idStr := r.PathValue("id")
+	id, err := strconv.ParseInt(idStr, 10, 64)
+	if err != nil || id <= 0 {
+		jsonError(w, http.StatusBadRequest, "bad alert id")
+		return
+	}
+	if err := platforms.ResolveAlert(r.Context(), a.DB, id); err != nil {
 		jsonError(w, http.StatusInternalServerError, err.Error())
 		return
 	}

@@ -94,6 +94,10 @@ func (a *API) handleSkillFileWrite(w http.ResponseWriter, r *http.Request) {
 		jsonError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
+	// New name/description in frontmatter would otherwise be hidden
+	// behind the 60s skills cache — drop it so the next list call
+	// re-scans.
+	skills.InvalidateCache()
 	updated, _ := sc.ReadFile(body.Path)
 	jsonOK(w, map[string]string{"path": body.Path, "content": updated})
 }

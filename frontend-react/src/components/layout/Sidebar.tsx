@@ -20,6 +20,7 @@ import {
   ListTodo,
   UserSearch,
   TrendingUp,
+  Network,
 } from 'lucide-react';
 import styles from './Sidebar.module.css';
 
@@ -54,6 +55,7 @@ const NAV_GROUPS: readonly NavGroup[] = [
       { path: '/customer',  icon: <UserSearch size={18} />,    label: 'Customer 360' },
       { path: '/sales',     icon: <TrendingUp size={18} />,    label: 'rain Sales' },
       { path: '/service',   icon: <Activity size={18} />,      label: 'rain Service' },
+      { path: '/dark-noc',  icon: <Network size={18} />,       label: 'rain Dark NOC' },
       { path: '/clickup',   icon: <ListTodo size={18} />,      label: 'ClickUp' },
       { path: '/tasks',     icon: <KanbanSquare size={18} />,  label: 'Task Board' },
       { path: '/approvals', icon: <CheckSquare size={18} />,   label: 'Approvals' },

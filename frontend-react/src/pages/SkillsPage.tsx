@@ -4,7 +4,7 @@
    ============================================================ */
 
 import { useCallback, useEffect, useMemo, useState } from 'react';
-import { Sparkles, Server, FileText, Package, Save, Plus } from 'lucide-react';
+import { Sparkles, Server, FileText, Package, Save } from 'lucide-react';
 import HudPanel from '../components/shared/HudPanel';
 import HudSummaryStrip from '../components/shared/HudSummaryStrip';
 import { HudChip, HudStatusLed } from '../components/shared/HudChip';
@@ -455,7 +455,12 @@ export default function SkillsPage() {
                     <div className={styles.rowList}>
                       {visible.map((s) => (
                         <SkillRow
-                          key={`${s.source}:${s.plugin ?? ''}:${s.name}`}
+                          // path is the on-disk location and the only
+                          // guaranteed-unique field — `plugin` is empty
+                          // for plugin-sourced skills, so two plugins
+                          // shipping the same filename collided on
+                          // (source,plugin,name).
+                          key={s.path}
                           skill={s}
                           selected={selectedSkill?.path === s.path}
                           onSelect={setSelectedSkill}

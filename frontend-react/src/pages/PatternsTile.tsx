@@ -12,8 +12,8 @@ import {
   type PatternsAggregate,
 } from '../api/patterns';
 
-function Spark({ days }: { readonly days: ReadonlyArray<{ count: number }> }) {
-  if (days.length === 0) {
+function Spark({ days }: { readonly days: ReadonlyArray<{ count: number }> | null }) {
+  if (!days || days.length === 0) {
     return <span style={{ opacity: 0.5, fontSize: 11 }}>no activity in window</span>;
   }
   const max = Math.max(1, ...days.map((d) => d.count));
@@ -113,7 +113,7 @@ export default function PatternsTile() {
                 <div style={{ opacity: 0.6, fontSize: 10, letterSpacing: '0.06em', textTransform: 'uppercase' }}>
                   Conversations · 30d
                 </div>
-                <Spark days={data.conversations_by_day} />
+                <Spark days={data.conversations_by_day ?? []} />
               </div>
             </div>
 
@@ -121,11 +121,11 @@ export default function PatternsTile() {
               <div style={{ opacity: 0.6, fontSize: 10, letterSpacing: '0.06em', textTransform: 'uppercase', marginBottom: 4 }}>
                 Memory entries by kind
               </div>
-              {data.memory_by_kind.length === 0 ? (
+              {(data.memory_by_kind?.length ?? 0) === 0 ? (
                 <div style={{ opacity: 0.5 }}>no entries yet</div>
               ) : (
                 <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
-                  {data.memory_by_kind.map((k) => (
+                  {(data.memory_by_kind ?? []).map((k) => (
                     <HudChip key={k.kind} color="#7cc6ff">
                       {k.kind} · {k.count}
                     </HudChip>
@@ -138,13 +138,13 @@ export default function PatternsTile() {
               <div style={{ opacity: 0.6, fontSize: 10, letterSpacing: '0.06em', textTransform: 'uppercase', marginBottom: 4 }}>
                 Trending stems · k-anon ≥3
               </div>
-              {data.top_keyword_stems.length === 0 ? (
+              {(data.top_keyword_stems?.length ?? 0) === 0 ? (
                 <div style={{ opacity: 0.5 }}>
                   no terms cleared k-anon yet — needs ≥3 distinct users sharing a stem
                 </div>
               ) : (
                 <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
-                  {data.top_keyword_stems.map((s) => (
+                  {(data.top_keyword_stems ?? []).map((s) => (
                     <HudChip key={s.stem} color="#6ff2a0">
                       {s.stem} · {s.occurrences}× / {s.user_buckets}u
                     </HudChip>

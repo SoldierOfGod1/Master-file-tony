@@ -71,3 +71,38 @@ export async function setIMSIOverride(customerID: string, imsis: string[]): Prom
     { imsis },
   );
 }
+
+// ---- Usage summary --------------------------------------------
+// Headline rollup of the last 30 days from the rain Axiom HTTP API
+// (api.sit.rain.co.za/axiom/usage-online/fact-cdr-analytics/daily-usage),
+// pre-computed server-side. Replaces the old Athena CDR tile.
+
+export interface UsageDay {
+  readonly date: string;
+  readonly bytes: number;
+  readonly up?: number;
+  readonly down?: number;
+}
+
+export interface UsageSummary {
+  readonly msisdn: string;
+  /** "axiom-api" | "gaussdb" — which upstream the numbers came from.
+   *  Display in the tile chip so the operator knows the provenance.
+   *  Backend chooses based on the USAGE_SOURCE env; frontend doesn't
+   *  override per-call (kept central so two operators don't see
+   *  divergent numbers for the same MSISDN). */
+  readonly source?: 'axiom-api' | 'gaussdb' | string;
+  readonly window_days: number;
+  readonly first_day?: string;
+  readonly last_day?: string;
+  readonly total_bytes: number;
+  readonly avg_daily_bytes: number;
+  readonly peak_daily_bytes: number;
+  readonly peak_day?: string;
+  readonly active_days: number;
+  readonly series: UsageDay[];
+}
+
+export async function getUsageSummary(msisdn: string): Promise<UsageSummary | null> {
+  return apiGet<UsageSummary>(`/customer/usage/summary?msisdn=${encodeURIComponent(msisdn)}`);
+}

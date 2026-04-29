@@ -15,8 +15,11 @@ import (
 
 	"github.com/SoldierOfGod1/command-centre/internal/chat"
 	"github.com/SoldierOfGod1/command-centre/internal/config"
+	"github.com/SoldierOfGod1/command-centre/internal/axiomapi"
 	"github.com/SoldierOfGod1/command-centre/internal/customer"
+	"github.com/SoldierOfGod1/command-centre/internal/darknoc"
 	"github.com/SoldierOfGod1/command-centre/internal/event"
+	"github.com/SoldierOfGod1/command-centre/internal/gaussdb"
 	"github.com/SoldierOfGod1/command-centre/internal/middleware"
 	"github.com/SoldierOfGod1/command-centre/internal/platforms"
 	"github.com/SoldierOfGod1/command-centre/internal/runner"
@@ -62,7 +65,25 @@ type API struct {
 	Runner      *runner.Manager
 	SalesPoller *sales.Poller
 	Feed        *event.Publisher // activity feed writer; may be nil in tests
-	StartTime   time.Time
+	// Dark NOC adapter — read-only ClickHouse fault telemetry +
+	// 41-agent reference registry. Nil means the /api/v1/darknoc/*
+	// endpoints all return 503; the frontend reads /darknoc/config
+	// and renders the "set DARK_NOC_ENABLED" banner.
+	DarkNoc        darknoc.Connector
+	DarkNocGrafana *darknoc.GrafanaProxy
+	// AxiomAPI is the rate-limited HTTP client for the rain Axiom
+	// HTTP API at api.sit.rain.co.za (CDR daily usage by MSISDN
+	// today, more endpoints to follow). Nil means the proxy routes
+	// return 503; main.go wires it from AXIOM_API_BASE_URL.
+	AxiomAPI       *axiomapi.Client
+	// Gaussdb is the optional GaussDB DWS · PROD client used as an
+	// alternate source for daily-CDR usage. Nil means the gaussdb
+	// catalogue route returns 503 and the usage-summary dispatcher
+	// refuses USAGE_SOURCE=gaussdb. main.go always constructs one
+	// (it's lazy — pgxpool only opens on first call) so the operator
+	// can flip USAGE_SOURCE without a restart.
+	Gaussdb        *gaussdb.Client
+	StartTime      time.Time
 }
 
 func NewRouter(api *API, hub *ws.Hub, staticDir string) http.Handler {
@@ -184,6 +205,18 @@ func NewRouter(api *API, hub *ws.Hub, staticDir string) http.Handler {
 
 	// rain Sales — background-polled dashboard snapshot
 	RegisterSalesRoutes(mux, api)
+
+	// rain Dark NOC — read-only ClickHouse fault telemetry +
+	// Capgemini Open Registry reference list (env-gated).
+	RegisterDarkNocRoutes(mux, api)
+
+	// Axiom HTTP API — rate-limited proxy. Gated by RAIN_SUPPORT_L2.
+	RegisterAxiomAPIRoutes(mux, api)
+
+	// GaussDB DWS — schema catalogue endpoint. The usage-summary
+	// path itself is multiplexed inside RegisterAxiomAPIRoutes so
+	// the frontend has a single URL to call.
+	RegisterGaussdbRoutes(mux, api)
 
 	// Static files (frontend) with SPA fallback for React Router
 	mux.HandleFunc("/", spaHandler(staticDir))
@@ -996,6 +1029,12 @@ func (a *API) handleUpdateProject(w http.ResponseWriter, r *http.Request) {
 	}
 	if pu, ok := body["prodUrl"].(string); ok {
 		a.DB.Exec("UPDATE projects SET prod_url=?,updated_at=? WHERE id=?", pu, now, id)
+	}
+	// Link an existing ClickUp task to this project. Used by the
+	// "Ad-hoc Tasks" panel to attach an unlinked task to one of the
+	// existing core/main projects. Empty string clears the link.
+	if t, ok := body["clickupTaskId"].(string); ok {
+		a.DB.Exec("UPDATE projects SET clickup_task_id=?,updated_at=? WHERE id=?", t, now, id)
 	}
 	a.Bus.PublishJSON("project.update", map[string]string{"id": id, "action": "updated"})
 

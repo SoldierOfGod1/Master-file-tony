@@ -211,11 +211,32 @@ func (s *Scanner) rootForPath(clean string) string {
 		filepath.Join(s.homeDir, ".claude", "rules"),
 		filepath.Join(s.homeDir, ".claude", "skills"),
 		filepath.Join(s.homeDir, ".claude", "Skills"),
+		filepath.Join(s.homeDir, ".claude", "commands"),
+		filepath.Join(s.homeDir, ".claude", "plugins"),
 		filepath.Join(s.projectDir, ".claude", "agents"),
 		filepath.Join(s.projectDir, ".claude", "hooks"),
 		filepath.Join(s.projectDir, ".claude", "rules"),
 		filepath.Join(s.projectDir, ".claude", "skills"),
 		filepath.Join(s.projectDir, ".claude", "Skills"),
+		filepath.Join(s.projectDir, ".claude", "commands"),
+	}
+	// Harness configs are individual files at known paths — admit
+	// them by full path rather than via a directory root.
+	harnessFiles := []string{
+		filepath.Join(s.homeDir, ".claude", "settings.json"),
+		filepath.Join(s.homeDir, ".claude", "settings.local.json"),
+		filepath.Join(s.homeDir, ".claude", "mcp.json"),
+		filepath.Join(s.homeDir, "CLAUDE.md"),
+		filepath.Join(s.projectDir, ".claude", "settings.json"),
+		filepath.Join(s.projectDir, ".claude", "settings.local.json"),
+		filepath.Join(s.projectDir, ".mcp.json"),
+		filepath.Join(s.projectDir, ".claude", "CLAUDE.md"),
+		filepath.Join(s.projectDir, "CLAUDE.md"),
+	}
+	for _, f := range harnessFiles {
+		if filepath.Clean(f) == clean {
+			return clean
+		}
 	}
 	for _, root := range roots {
 		cleanRoot := filepath.Clean(root)

@@ -708,7 +708,12 @@ func (a *API) handleCustomerByID(w http.ResponseWriter, r *http.Request) {
 	// Phase D2 — same context-based incident_id plumbing as the
 	// search endpoint so the by-id path tags audit rows correctly too.
 	ctx := customer.WithIncidentID(r.Context(), strings.TrimSpace(r.URL.Query().Get("incident_id")))
-	view, err := customer.LookupProd(ctx, a.CustomerMgr, a.Log, "id", id)
+	// Honour ?connection= so a candidate-picker click stays on the
+	// same cluster the operator searched on. Without this, clicking
+	// a candidate from an axiom-prod search would fall back to the
+	// primary (e.g. SIT) where the individual id doesn't exist.
+	connOverride := strings.TrimSpace(r.URL.Query().Get("connection"))
+	view, err := customer.LookupProdOn(ctx, a.CustomerMgr, a.Log, connOverride, "id", id)
 	if err != nil {
 		// Fall back to single-pool legacy lookup.
 		view, err = customer.Lookup(ctx, pool, a.Log, "id", id)

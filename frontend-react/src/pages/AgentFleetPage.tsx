@@ -20,6 +20,8 @@ import {
   Sparkles,
   Zap,
   Scroll,
+  Terminal,
+  Settings,
 } from 'lucide-react';
 import HudPanel from '../components/shared/HudPanel';
 import HudSummaryStrip from '../components/shared/HudSummaryStrip';
@@ -30,17 +32,21 @@ import {
   listFleetAgents,
   listFleetHooks,
   listFleetRules,
+  listFleetPlaybooks,
+  listFleetHarnesses,
   readAgentMemory,
   readFleetFile,
   writeFleetFile,
   type FleetAgent,
   type FleetHook,
   type FleetRule,
+  type FleetPlaybook,
+  type FleetHarness,
 } from '../api/agentFleet';
 import hudStyles from '../theme/hud.module.css';
 import styles from './AgentFleetPage.module.css';
 
-type Tab = 'agents' | 'hooks' | 'rules';
+type Tab = 'agents' | 'hooks' | 'rules' | 'playbooks' | 'harnesses';
 
 /* Colours used by every sub-tab. Kept local because nothing else in the
    dashboard needs an agent-category palette. */
@@ -66,20 +72,24 @@ const colorFor = (cat: string): string => CATEGORY_COLOR[cat] ?? '#7cc6ff';
    lesson" input.
    ============================================================ */
 
-function AgentsTab() {
-  const [agents, setAgents] = useState<FleetAgent[]>([]);
-  const [loading, setLoading] = useState(true);
+function AgentsTab({
+  agents,
+  loading,
+  onReload,
+}: {
+  readonly agents: FleetAgent[];
+  readonly loading: boolean;
+  readonly onReload: () => void | Promise<void>;
+}) {
   const [selected, setSelected] = useState<FleetAgent | null>(null);
   const [sourceFilter, setSourceFilter] = useState<'all' | 'global' | 'project' | 'plugin'>('all');
   const [categoryFilter, setCategoryFilter] = useState<string | null>(null);
   const [query, setQuery] = useState('');
 
-  const load = useCallback(async () => {
-    setLoading(true);
-    setAgents(await listFleetAgents());
-    setLoading(false);
-  }, []);
-  useEffect(() => { void load(); }, [load]);
+  // Reload is just the parent's refresh — tabs no longer own the
+  // fetch lifecycle, so creating / editing an agent triggers a single
+  // reload instead of duplicating the request from the tab itself.
+  const load = useCallback(async () => { await onReload(); }, [onReload]);
 
   /* Drop agents that don't match the active filters. The filter chips
      below update in real time as the user types into the search box. */
@@ -506,20 +516,15 @@ function btnStyle(color: string, disabled: boolean): React.CSSProperties {
    Hooks tab — list of files in .claude/hooks/ with a click-to-preview.
    ============================================================ */
 
-function HooksTab() {
-  const [hooks, setHooks] = useState<FleetHook[]>([]);
-  const [loading, setLoading] = useState(true);
+function HooksTab({
+  hooks,
+  loading,
+}: {
+  readonly hooks: FleetHook[];
+  readonly loading: boolean;
+}) {
   const [selected, setSelected] = useState<FleetHook | null>(null);
   const [body, setBody] = useState('');
-
-  useEffect(() => {
-    void (async () => {
-      setLoading(true);
-      const list = await listFleetHooks();
-      setHooks(list);
-      setLoading(false);
-    })();
-  }, []);
 
   useEffect(() => {
     let cancelled = false;
@@ -611,19 +616,15 @@ function HooksTab() {
    (common / python / golang / cpp / ...).
    ============================================================ */
 
-function RulesTab() {
-  const [rules, setRules] = useState<FleetRule[]>([]);
-  const [loading, setLoading] = useState(true);
+function RulesTab({
+  rules,
+  loading,
+}: {
+  readonly rules: FleetRule[];
+  readonly loading: boolean;
+}) {
   const [selected, setSelected] = useState<FleetRule | null>(null);
   const [body, setBody] = useState('');
-
-  useEffect(() => {
-    void (async () => {
-      setLoading(true);
-      setRules(await listFleetRules());
-      setLoading(false);
-    })();
-  }, []);
 
   useEffect(() => {
     let cancelled = false;
@@ -714,6 +715,244 @@ function RulesTab() {
   );
 }
 
+/* ============================================================
+   Playbooks tab — slash-commands from .claude/commands/.
+   Each .md is a saved prompt the operator can run via "/<name>".
+   ============================================================ */
+
+function PlaybooksTab({
+  playbooks,
+  loading,
+}: {
+  readonly playbooks: FleetPlaybook[];
+  readonly loading: boolean;
+}) {
+  const [selected, setSelected] = useState<FleetPlaybook | null>(null);
+  const [body, setBody] = useState('');
+  const [query, setQuery] = useState('');
+
+  useEffect(() => {
+    let cancelled = false;
+    if (!selected) return;
+    void (async () => {
+      const src = await readFleetFile(selected.path);
+      if (!cancelled) setBody(src);
+    })();
+    return () => { cancelled = true; };
+  }, [selected]);
+
+  const filtered = useMemo(() => {
+    const q = query.trim().toLowerCase();
+    if (!q) return playbooks;
+    return playbooks.filter((p) =>
+      `${p.name} ${p.description}`.toLowerCase().includes(q),
+    );
+  }, [playbooks, query]);
+
+  const bySource = useMemo(() => {
+    const m = new Map<string, FleetPlaybook[]>();
+    for (const p of filtered) {
+      const arr = m.get(p.source) ?? [];
+      arr.push(p);
+      m.set(p.source, arr);
+    }
+    // Stable order: project, global, plugin (matches sourceRank).
+    return (['project', 'global', 'plugin'] as const)
+      .map((s) => [s, m.get(s) ?? []] as const)
+      .filter(([, arr]) => arr.length > 0);
+  }, [filtered]);
+
+  const sourceColor = (s: string): string =>
+    s === 'project' ? '#6ff2a0' : s === 'plugin' ? '#c488ff' : '#00f0ff';
+
+  return (
+    <div className={styles.hooksLayout}>
+      <div className={styles.hooksLeft}>
+        <div className={styles.controls}>
+          <input
+            type="search"
+            className={styles.search}
+            placeholder="// search playbooks"
+            value={query}
+            onChange={(e) => setQuery(e.target.value)}
+          />
+        </div>
+        {loading ? (
+          <HudPanel title="Loading" accent="#7cc6ff" leading={<HudStatusLed color="#7cc6ff" />}>
+            <div className={styles.empty}>// scanning .claude/commands…</div>
+          </HudPanel>
+        ) : playbooks.length === 0 ? (
+          <HudPanel title="No playbooks" accent="#ffaa00" leading={<HudStatusLed color="#ffaa00" animate={false} />}>
+            <div className={styles.empty}>// no slash commands found in ~/.claude/commands or .claude/commands</div>
+          </HudPanel>
+        ) : (
+          bySource.map(([src, list]) => (
+            <HudPanel
+              key={src}
+              title={src.toUpperCase()}
+              accent={sourceColor(src)}
+              leading={<HudStatusLed color={sourceColor(src)} animate={false} />}
+              meta={<><Terminal size={10} /> {list.length}</>}
+            >
+              <div className={styles.hookList}>
+                {list.map((p) => (
+                  <button
+                    key={p.path}
+                    type="button"
+                    className={`${styles.hookRow} ${selected?.path === p.path ? styles.hookRowActive : ''}`}
+                    onClick={() => setSelected(p)}
+                  >
+                    <span className={styles.hookName}>/{p.name}</span>
+                    <span className={styles.hookMeta}>
+                      {p.plugin && <HudChip color="#c488ff">{p.plugin}</HudChip>}
+                      <span className={styles.hookSize}>{formatSize(p.size_bytes)}</span>
+                    </span>
+                  </button>
+                ))}
+              </div>
+            </HudPanel>
+          ))
+        )}
+      </div>
+
+      <div className={styles.hooksRight}>
+        {selected ? (
+          <HudPanel
+            title={`/${selected.name}`}
+            subtitle={selected.description}
+            accent={sourceColor(selected.source)}
+            leading={<HudStatusLed color={sourceColor(selected.source)} />}
+            meta={<HudChip color={sourceColor(selected.source)}>{selected.source}</HudChip>}
+            footer={<code className={styles.detailPath}>{selected.path}</code>}
+          >
+            <pre className={styles.sourceBox}>{body || '// empty file'}</pre>
+          </HudPanel>
+        ) : (
+          <HudPanel title="Preview" accent="#7cc6ff" leading={<HudStatusLed color="#7cc6ff" animate={false} />}>
+            <div className={styles.detailPlaceholder}>
+              <Terminal size={28} />
+              <span>Select a playbook on the left to read it.</span>
+            </div>
+          </HudPanel>
+        )}
+      </div>
+    </div>
+  );
+}
+
+/* ============================================================
+   Harnesses tab — settings.json / settings.local.json / mcp.json
+   / CLAUDE.md. The harness configuration that shapes how the CLI
+   and the command-centre run.
+   ============================================================ */
+
+function HarnessesTab({
+  harnesses,
+  loading,
+}: {
+  readonly harnesses: FleetHarness[];
+  readonly loading: boolean;
+}) {
+  const [selected, setSelected] = useState<FleetHarness | null>(null);
+  const [body, setBody] = useState('');
+
+  useEffect(() => {
+    let cancelled = false;
+    if (!selected) return;
+    void (async () => {
+      const src = await readFleetFile(selected.path);
+      if (!cancelled) setBody(src);
+    })();
+    return () => { cancelled = true; };
+  }, [selected]);
+
+  const bySource = useMemo(() => {
+    const m = new Map<string, FleetHarness[]>();
+    for (const h of harnesses) {
+      const arr = m.get(h.source) ?? [];
+      arr.push(h);
+      m.set(h.source, arr);
+    }
+    return (['project', 'global'] as const)
+      .map((s) => [s, m.get(s) ?? []] as const)
+      .filter(([, arr]) => arr.length > 0);
+  }, [harnesses]);
+
+  const kindColor = (k: string): string => {
+    switch (k) {
+      case 'settings':       return '#00f0ff';
+      case 'settings.local': return '#ffc566';
+      case 'mcp':            return '#c488ff';
+      case 'claude.md':      return '#6ff2a0';
+      default:               return '#7cc6ff';
+    }
+  };
+
+  return (
+    <div className={styles.hooksLayout}>
+      <div className={styles.hooksLeft}>
+        {loading ? (
+          <HudPanel title="Loading" accent="#7cc6ff" leading={<HudStatusLed color="#7cc6ff" />}>
+            <div className={styles.empty}>// scanning harness config…</div>
+          </HudPanel>
+        ) : harnesses.length === 0 ? (
+          <HudPanel title="No harnesses" accent="#ffaa00" leading={<HudStatusLed color="#ffaa00" animate={false} />}>
+            <div className={styles.empty}>// no settings.json / mcp.json / CLAUDE.md found</div>
+          </HudPanel>
+        ) : (
+          bySource.map(([src, list]) => (
+            <HudPanel
+              key={src}
+              title={src.toUpperCase()}
+              accent={src === 'project' ? '#6ff2a0' : '#00f0ff'}
+              leading={<HudStatusLed color={src === 'project' ? '#6ff2a0' : '#00f0ff'} animate={false} />}
+              meta={<><Settings size={10} /> {list.length}</>}
+            >
+              <div className={styles.hookList}>
+                {list.map((h) => (
+                  <button
+                    key={h.path}
+                    type="button"
+                    className={`${styles.hookRow} ${selected?.path === h.path ? styles.hookRowActive : ''}`}
+                    onClick={() => setSelected(h)}
+                  >
+                    <span className={styles.hookName}>{h.name}</span>
+                    <span className={styles.hookMeta}>
+                      <HudChip color={kindColor(h.kind)}>{h.kind}</HudChip>
+                      <span className={styles.hookSize}>{formatSize(h.size_bytes)}</span>
+                    </span>
+                  </button>
+                ))}
+              </div>
+            </HudPanel>
+          ))
+        )}
+      </div>
+
+      <div className={styles.hooksRight}>
+        {selected ? (
+          <HudPanel
+            title={selected.name}
+            accent={kindColor(selected.kind)}
+            leading={<HudStatusLed color={kindColor(selected.kind)} />}
+            meta={<HudChip color={kindColor(selected.kind)}>{selected.kind}</HudChip>}
+            footer={<code className={styles.detailPath}>{selected.path}</code>}
+          >
+            <pre className={styles.sourceBox}>{body || '// empty'}</pre>
+          </HudPanel>
+        ) : (
+          <HudPanel title="Preview" accent="#7cc6ff" leading={<HudStatusLed color="#7cc6ff" animate={false} />}>
+            <div className={styles.detailPlaceholder}>
+              <Settings size={28} />
+              <span>Pick a harness file on the left — settings, MCP, or CLAUDE.md.</span>
+            </div>
+          </HudPanel>
+        )}
+      </div>
+    </div>
+  );
+}
+
 function formatSize(bytes: number): string {
   if (bytes < 1024) return `${bytes}B`;
   if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)}KB`;
@@ -726,30 +965,65 @@ function formatSize(bytes: number): string {
 
 export default function AgentFleetPage() {
   const [tab, setTab] = useState<Tab>('agents');
-  const [counts, setCounts] = useState({ agents: 0, hooks: 0, rules: 0 });
+  // All five fleet datasets live on the page so tab switches don't
+  // re-fetch — the previous shape made every tab visit run its own
+  // network round trip, which is what made navigating feel slow.
+  const [agents, setAgents] = useState<FleetAgent[]>([]);
+  const [hooks, setHooks] = useState<FleetHook[]>([]);
+  const [rules, setRules] = useState<FleetRule[]>([]);
+  const [playbooks, setPlaybooks] = useState<FleetPlaybook[]>([]);
+  const [harnesses, setHarnesses] = useState<FleetHarness[]>([]);
+  const [loading, setLoading] = useState({
+    agents: true, hooks: true, rules: true, playbooks: true, harnesses: true,
+  });
   const [busy, setBusy] = useState(false);
   const [createOpen, setCreateOpen] = useState(false);
-  // Bumping this key remounts the AgentsTab so newly-created agents
-  // show up immediately without a hard refresh.
-  const [agentsReloadKey, setAgentsReloadKey] = useState(0);
 
+  // Each fetcher resolves independently so a slow plugin walk on
+  // (say) /agents doesn't block the other tabs from rendering.
   const refresh = useCallback(async () => {
     setBusy(true);
-    const [a, h, r] = await Promise.all([
-      listFleetAgents(), listFleetHooks(), listFleetRules(),
+    setLoading({ agents: true, hooks: true, rules: true, playbooks: true, harnesses: true });
+    await Promise.all([
+      listFleetAgents().then((a) => {
+        setAgents(a);
+        setLoading((s) => ({ ...s, agents: false }));
+      }),
+      listFleetHooks().then((h) => {
+        setHooks(h);
+        setLoading((s) => ({ ...s, hooks: false }));
+      }),
+      listFleetRules().then((r) => {
+        setRules(r);
+        setLoading((s) => ({ ...s, rules: false }));
+      }),
+      listFleetPlaybooks().then((p) => {
+        setPlaybooks(p);
+        setLoading((s) => ({ ...s, playbooks: false }));
+      }),
+      listFleetHarnesses().then((h) => {
+        setHarnesses(h);
+        setLoading((s) => ({ ...s, harnesses: false }));
+      }),
     ]);
-    setCounts({ agents: a.length, hooks: h.length, rules: r.length });
     setBusy(false);
   }, []);
   useEffect(() => { void refresh(); }, [refresh]);
+
+  // Reloading agents alone after create — keeps the cheap path cheap.
+  const reloadAgents = useCallback(async () => {
+    setLoading((s) => ({ ...s, agents: true }));
+    setAgents(await listFleetAgents());
+    setLoading((s) => ({ ...s, agents: false }));
+  }, []);
 
   return (
     <div className={hudStyles.page}>
       <HudSummaryStrip
         title="Agent Fleet · Claude Code Configuration"
-        subtitle={`${counts.agents} agents · ${counts.hooks} hooks · ${counts.rules} rule docs on disk`}
-        gaugeValue={counts.agents === 0 ? 0 : Math.min(counts.agents / 80, 1)}
-        gaugeReadout={`${counts.agents}`}
+        subtitle={`${agents.length} agents · ${hooks.length} hooks · ${rules.length} rules · ${playbooks.length} playbooks · ${harnesses.length} harnesses`}
+        gaugeValue={agents.length === 0 ? 0 : Math.min(agents.length / 80, 1)}
+        gaugeReadout={`${agents.length}`}
         gaugeLabel="AGENTS"
         gaugeColor="#00f0ff"
         extra={
@@ -772,9 +1046,11 @@ export default function AgentFleetPage() {
 
       <div className={styles.tabRow}>
         {([
-          ['agents', 'Agents', counts.agents, <Bot size={12} />],
-          ['hooks', 'Hooks', counts.hooks, <Zap size={12} />],
-          ['rules', 'Rules', counts.rules, <Scroll size={12} />],
+          ['agents',    'Agents',    agents.length,    <Bot size={12} />],
+          ['hooks',     'Hooks',     hooks.length,     <Zap size={12} />],
+          ['rules',     'Rules',     rules.length,     <Scroll size={12} />],
+          ['playbooks', 'Playbooks', playbooks.length, <Terminal size={12} />],
+          ['harnesses', 'Harnesses', harnesses.length, <Settings size={12} />],
         ] as const).map(([key, label, count, icon]) => (
           <button
             key={key}
@@ -795,17 +1071,31 @@ export default function AgentFleetPage() {
         </button>
       </div>
 
-      {tab === 'agents' && <AgentsTab key={agentsReloadKey} />}
-      {tab === 'hooks' && <HooksTab />}
-      {tab === 'rules' && <RulesTab />}
+      {/* Each tab is rendered with hidden CSS rather than mounted/
+          unmounted — keeps per-tab UI state (selection, query) intact
+          across switches, which used to reset on every navigation. */}
+      <div style={{ display: tab === 'agents'    ? 'block' : 'none' }}>
+        <AgentsTab agents={agents} loading={loading.agents} onReload={reloadAgents} />
+      </div>
+      <div style={{ display: tab === 'hooks'     ? 'block' : 'none' }}>
+        <HooksTab hooks={hooks} loading={loading.hooks} />
+      </div>
+      <div style={{ display: tab === 'rules'     ? 'block' : 'none' }}>
+        <RulesTab rules={rules} loading={loading.rules} />
+      </div>
+      <div style={{ display: tab === 'playbooks' ? 'block' : 'none' }}>
+        <PlaybooksTab playbooks={playbooks} loading={loading.playbooks} />
+      </div>
+      <div style={{ display: tab === 'harnesses' ? 'block' : 'none' }}>
+        <HarnessesTab harnesses={harnesses} loading={loading.harnesses} />
+      </div>
 
       {createOpen && (
         <CreateAgentModal
           onClose={() => setCreateOpen(false)}
           onCreated={() => {
             setCreateOpen(false);
-            setAgentsReloadKey((k) => k + 1);
-            void refresh();
+            void reloadAgents();
           }}
         />
       )}
