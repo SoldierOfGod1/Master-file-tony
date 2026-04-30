@@ -796,7 +796,11 @@ func msisdnVariantsBig(digits string) []int64 {
 }
 
 func resolveIdentityProd(ctx context.Context, pool *pgxpool.Pool, mode, value string) (string, Identity, []ContactMedium, error) {
-	subCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	// 18s gives the email/phone seek room on Prod where contact_medium
+	// is large; the outer LookupProdOn budget is 25s so this still
+	// leaves headroom for the cascade. 5s used to be enough on SIT,
+	// but the prod table's row-count made it brittle.
+	subCtx, cancel := context.WithTimeout(ctx, 18*time.Second)
 	defer cancel()
 
 	var indID string
@@ -820,9 +824,13 @@ func resolveIdentityProd(ctx context.Context, pool *pgxpool.Pool, mode, value st
 			return "", Identity{}, nil, fmt.Errorf("phone lookup: %w", err)
 		}
 	case "email":
+		// LOWER(...)=LOWER(...) is exact-match case-insensitive, same
+		// semantics as ILIKE without wildcards but lets Postgres reach
+		// for a functional index on lower(email_address) if one exists
+		// (which it does on prod). ILIKE was forcing a sequential scan.
 		err := pool.QueryRow(subCtx,
 			`SELECT COALESCE(individual_id,'') FROM party.contact_medium
-			  WHERE email_address ILIKE $1
+			  WHERE LOWER(email_address) = LOWER($1)
 			  ORDER BY preferred DESC NULLS LAST, updated_at DESC
 			  LIMIT 1`, value,
 		).Scan(&indID)
@@ -830,9 +838,11 @@ func resolveIdentityProd(ctx context.Context, pool *pgxpool.Pool, mode, value st
 			return "", Identity{}, nil, fmt.Errorf("email lookup: %w", err)
 		}
 		if indID == "" {
-			// Fallback: login_name on individual directly.
+			// Fallback: login_name on individual directly. Same
+			// LOWER()=LOWER() shape so a functional index can apply.
 			_ = pool.QueryRow(subCtx,
-				`SELECT id FROM party.individual WHERE login_name ILIKE $1 LIMIT 1`, value,
+				`SELECT id FROM party.individual
+				  WHERE LOWER(login_name) = LOWER($1) LIMIT 1`, value,
 			).Scan(&indID)
 		}
 	case "id":
