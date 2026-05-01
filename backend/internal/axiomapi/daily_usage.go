@@ -81,8 +81,9 @@ func (c *Client) Limiter() *ratelimit.Limiter {
 // observed at api.sit.rain.co.za. Three parallel fields:
 //
 //	date        — sorted array of "YYYY-MM-DD" strings (30-day window)
-//	actualUsage — keyed by date string; value is bytes (number) or
-//	              an object split by direction (upload/download).
+//	actualUsage — keyed by SERVICE TYPE (e.g. "GPRS", "MMS"). Each value
+//	              is an array of bytes parallel to `date` — element i
+//	              corresponds to date[i]. NOT a date-keyed dict.
 //	              Empty {} means no traffic in window — quiet customer,
 //	              not an error.
 //	events      — same shape as actualUsage; non-data events.
@@ -245,11 +246,41 @@ func (c *Client) Summary(ctx context.Context, msisdn string) (UsageSummary, []by
 		out.LastDay = resp.Date[out.WindowDays-1]
 	}
 
+	// actualUsage is keyed by service type ("GPRS", etc.) and each
+	// value is an ARRAY of bytes parallel to resp.Date. Walk every
+	// service type's array, sum into per-index buckets, then collapse
+	// into the per-day series. The previous implementation indexed by
+	// date string and silently produced zeros for every customer.
+	dailyBytes := make([]int64, out.WindowDays)
+	dailyUp := make([]int64, out.WindowDays)
+	dailyDown := make([]int64, out.WindowDays)
+
+	for _, raw := range resp.ActualUsage {
+		var arr []json.RawMessage
+		if err := json.Unmarshal(raw, &arr); err != nil {
+			// Unexpected non-array shape for this service type — skip
+			// so a single rogue field can't zero out the whole rollup.
+			continue
+		}
+		n := len(arr)
+		if n > out.WindowDays {
+			n = out.WindowDays
+		}
+		for i := 0; i < n; i++ {
+			total, up, down := parseUsageValue(arr[i])
+			dailyBytes[i] += total
+			dailyUp[i] += up
+			dailyDown[i] += down
+		}
+	}
+
 	out.Series = make([]DayUsage, 0, out.WindowDays)
-	for _, day := range resp.Date {
-		du := DayUsage{Date: day}
-		if v, ok := resp.ActualUsage[day]; ok {
-			du.Bytes, du.Up, du.Down = parseUsageValue(v)
+	for i, day := range resp.Date {
+		du := DayUsage{
+			Date:  day,
+			Bytes: dailyBytes[i],
+			Up:    dailyUp[i],
+			Down:  dailyDown[i],
 		}
 		out.Series = append(out.Series, du)
 		out.TotalBytes += du.Bytes
