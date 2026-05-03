@@ -27,10 +27,12 @@ import (
 //
 // Configuration (all via env, no config file):
 //   RAIN_ALERT_SMTP_HOST  hostname of SMTP server (required)
-//   RAIN_ALERT_SMTP_PORT  port (default 587)
-//   RAIN_ALERT_SMTP_USER  SMTP username (required)
-//   RAIN_ALERT_SMTP_PASS  SMTP password / app token (required)
-//   RAIN_ALERT_FROM       From: header (default = SMTP_USER)
+//   RAIN_ALERT_SMTP_PORT  port (default 587 for AUTH, set 25 for unauth relay)
+//   RAIN_ALERT_SMTP_USER  SMTP username (optional — empty = unauthenticated
+//                         relay, used by rain's internal SMTP from VPN ranges)
+//   RAIN_ALERT_SMTP_PASS  SMTP password / app token (required only when USER set)
+//   RAIN_ALERT_FROM       From: header (defaults to SMTP_USER; required when
+//                         USER is empty so the envelope sender is unambiguous)
 //   RAIN_ALERT_TO         comma-separated recipients (required)
 //   RAIN_ALERT_MIN_SEVERITY  one of info/warning/critical/p1
 //                            (default critical — matches the
@@ -135,7 +137,15 @@ func (e *EmailSink) send(subject, body string) error {
 		from = e.cfg.User
 	}
 	addr := net.JoinHostPort(e.cfg.Host, strconv.Itoa(e.cfg.Port))
-	auth := smtp.PlainAuth("", e.cfg.User, e.cfg.Pass, e.cfg.Host)
+	// Auth is optional — when User is empty we're hitting an internal
+	// relay that accepts unauthenticated sends from on-prem/VPN ranges
+	// (rain's setup with sogalerts@rain.co.za works this way). Pass nil
+	// auth so smtp.SendMail skips the AUTH command entirely; passing a
+	// PlainAuth with empty credentials would make some servers reject.
+	var auth smtp.Auth
+	if e.cfg.User != "" {
+		auth = smtp.PlainAuth("", e.cfg.User, e.cfg.Pass, e.cfg.Host)
+	}
 	headers := []string{
 		"From: " + from,
 		"To: " + strings.Join(e.cfg.To, ", "),
@@ -193,15 +203,29 @@ func loadEmailConfigFromEnv() (EmailConfig, error) {
 		From: strings.TrimSpace(os.Getenv("RAIN_ALERT_FROM")),
 	}
 	to := strings.TrimSpace(os.Getenv("RAIN_ALERT_TO"))
-	if cfg.Host == "" || cfg.User == "" || cfg.Pass == "" || to == "" {
-		return EmailConfig{}, errors.New("email alerts disabled: set RAIN_ALERT_SMTP_HOST, _USER, _PASS, _TO")
+	if cfg.Host == "" || to == "" {
+		return EmailConfig{}, errors.New("email alerts disabled: set RAIN_ALERT_SMTP_HOST and RAIN_ALERT_TO")
+	}
+	// USER is optional (unauth relay); when supplied, PASS becomes
+	// required so we don't silently send credentials-less AUTH PLAIN.
+	if cfg.User != "" && cfg.Pass == "" {
+		return EmailConfig{}, errors.New("email alerts misconfigured: RAIN_ALERT_SMTP_USER set but RAIN_ALERT_SMTP_PASS empty")
+	}
+	// FROM is mandatory on the unauth path — we can't fall back to USER.
+	if cfg.User == "" && cfg.From == "" {
+		return EmailConfig{}, errors.New("email alerts misconfigured: RAIN_ALERT_FROM required when RAIN_ALERT_SMTP_USER is unset")
 	}
 	for _, addr := range strings.Split(to, ",") {
 		if s := strings.TrimSpace(addr); s != "" {
 			cfg.To = append(cfg.To, s)
 		}
 	}
+	// Default port: 587 if AUTH is in play, 25 for unauth relay (the
+	// classic SMTP submission/relay split). Operator can still override.
 	port := 587
+	if cfg.User == "" {
+		port = 25
+	}
 	if v := strings.TrimSpace(os.Getenv("RAIN_ALERT_SMTP_PORT")); v != "" {
 		if n, err := strconv.Atoi(v); err == nil && n > 0 && n < 65536 {
 			port = n

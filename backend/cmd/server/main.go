@@ -20,6 +20,7 @@ import (
 	"github.com/SoldierOfGod1/command-centre/internal/discord"
 	"github.com/SoldierOfGod1/command-centre/internal/event"
 	"github.com/SoldierOfGod1/command-centre/internal/gaussdb"
+	"github.com/SoldierOfGod1/command-centre/internal/networkstate"
 	"github.com/SoldierOfGod1/command-centre/internal/logging"
 	"github.com/SoldierOfGod1/command-centre/internal/platforms"
 	"github.com/SoldierOfGod1/command-centre/internal/runner"
@@ -295,6 +296,23 @@ func main() {
 		"placeholder_sql", gaussdb.PlaceholderSQL,
 		"usage_source_default", strings.TrimSpace(os.Getenv("USAGE_SOURCE")))
 
+	// State of the Network poller — refreshes its in-memory snapshot
+	// every 30s by default. The frontend reads from the snapshot so
+	// page loads never block on ClickHouse. Override the cadence with
+	// NETWORKSTATE_INTERVAL (e.g. "10s" for tight refresh, "60s" to
+	// reduce ClickHouse load). Floor of 5s enforced internally.
+	networkPoller := networkstate.NewPoller(darkNocAdapter, platformMon, dbMon, db.DB, log)
+	if v := strings.TrimSpace(os.Getenv("NETWORKSTATE_INTERVAL")); v != "" {
+		if d, err := time.ParseDuration(v); err == nil {
+			networkPoller.SetInterval(d)
+			log.Info("networkstate interval override", "interval", d.String())
+		} else {
+			log.Warn("NETWORKSTATE_INTERVAL parse failed; using default", "raw", v, "error", err)
+		}
+	}
+	go networkPoller.Start(ctx)
+	defer networkPoller.Stop()
+
 	api := &server.API{
 		DB:             db.DB,
 		Store:          db,
@@ -312,6 +330,7 @@ func main() {
 		MCPHealth:      mcpHealth,
 		PlatformMon:    platformMon,
 		DBHealth:       dbMon,
+		AlertSink:      alertSink,
 		Runner:         runMgr,
 		SalesPoller:    salesPoller,
 		Feed:           feedPub,
@@ -319,6 +338,7 @@ func main() {
 		DarkNocGrafana: darkNocGrafana,
 		AxiomAPI:       axiomClient,
 		Gaussdb:        gaussClient,
+		NetworkState:   networkPoller,
 		StartTime:      time.Now(),
 	}
 

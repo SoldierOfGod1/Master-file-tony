@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/SoldierOfGod1/command-centre/internal/platforms"
 )
@@ -31,6 +32,54 @@ func RegisterPlatformsRoutes(mux *http.ServeMux, api *API) {
 	// with the given incident_id, so an operator (or the agent)
 	// can reconstruct everything we did during one incident.
 	mux.HandleFunc("GET /api/v1/platforms/incidents/{id}/timeline", api.handleIncidentTimeline)
+	// Manual test-send for the email alert pipeline. Fires one
+	// synthetic Critical through the configured AlertSink so the
+	// operator can verify sogalerts@rain.co.za actually receives
+	// without waiting for a real outage. Gated by RAIN_SUPPORT_L2.
+	mux.HandleFunc("POST /api/v1/alerts/test", api.handleAlertTest)
+}
+
+// handleAlertTest fires a synthetic Critical alert through the
+// configured AlertSink (SQL + Email MultiSink). Useful as a
+// "send test email" affordance both during initial wire-up and
+// when investigating delivery problems later. Doesn't bypass the
+// EmailSink dedup window — repeated calls within 30 minutes will
+// only fire the first one through to SMTP, which is the intended
+// behaviour (we don't want operators DoS-ing their own inbox).
+func (a *API) handleAlertTest(w http.ResponseWriter, r *http.Request) {
+	if !overrideWritesEnabled() {
+		jsonError(w, 403, "alert test disabled — set RAIN_SUPPORT_L2=true to enable")
+		return
+	}
+	if a.AlertSink == nil {
+		jsonError(w, 503, "alert sink not configured")
+		return
+	}
+	now := time.Now().UTC()
+	alert := platforms.Alert{
+		ServiceID: "alert-pipeline-test",
+		Kind:      "manual_test_send",
+		Severity:  platforms.SeverityCritical,
+		Message:   "Test alert from Soldier of God — confirms the email pipeline is wired.",
+		Cause:     "Manual /api/v1/alerts/test invocation by an operator.",
+		NextStep:  "If you got this email, the pipeline works. No action needed.",
+		CreatedAt: now,
+	}
+	cur := platforms.Status{
+		State:         "down",
+		LatencyMS:     0,
+		FailureStreak: 0,
+		CheckedAt:     now,
+		Error:         "(synthetic test)",
+	}
+	a.AlertSink.Emit(r.Context(), alert, nil, cur)
+	jsonOK(w, map[string]any{
+		"sent":    true,
+		"service": alert.ServiceID,
+		"kind":    alert.Kind,
+		"at":      now.Format(time.RFC3339),
+		"note":    "Email is dedup-suppressed if fired again within 30 minutes (configurable via RAIN_ALERT_DEDUP_MINUTES).",
+	})
 }
 
 // handleIncidentTimeline rolls up everything tagged with this

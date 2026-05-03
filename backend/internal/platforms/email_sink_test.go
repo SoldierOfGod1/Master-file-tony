@@ -168,8 +168,84 @@ func TestLoadEmailConfigFromEnv_MissingFails(t *testing.T) {
 	t.Setenv("RAIN_ALERT_SMTP_USER", "")
 	t.Setenv("RAIN_ALERT_SMTP_PASS", "")
 	t.Setenv("RAIN_ALERT_TO", "")
+	t.Setenv("RAIN_ALERT_FROM", "")
 	if _, err := loadEmailConfigFromEnv(); err == nil {
 		t.Fatal("expected error for missing env vars")
+	}
+}
+
+// TestLoadEmailConfigFromEnv_UnauthRelay validates the unauthenticated
+// internal-relay path used by sogalerts@rain.co.za. HOST + TO + FROM
+// are mandatory; USER/PASS may be empty. Default port flips to 25.
+func TestLoadEmailConfigFromEnv_UnauthRelay(t *testing.T) {
+	t.Setenv("RAIN_ALERT_SMTP_HOST", "smtp.rain.co.za")
+	t.Setenv("RAIN_ALERT_SMTP_USER", "")
+	t.Setenv("RAIN_ALERT_SMTP_PASS", "")
+	t.Setenv("RAIN_ALERT_FROM", "sogalerts@rain.co.za")
+	t.Setenv("RAIN_ALERT_TO", "sogalerts@rain.co.za")
+	t.Setenv("RAIN_ALERT_SMTP_PORT", "")
+	cfg, err := loadEmailConfigFromEnv()
+	if err != nil {
+		t.Fatalf("unauth relay should succeed, got: %v", err)
+	}
+	if cfg.User != "" || cfg.Pass != "" {
+		t.Errorf("USER/PASS should stay empty: %+v", cfg)
+	}
+	if cfg.Port != 25 {
+		t.Errorf("default port for unauth should be 25, got %d", cfg.Port)
+	}
+	if cfg.From != "sogalerts@rain.co.za" {
+		t.Errorf("FROM mismatch: %q", cfg.From)
+	}
+}
+
+// TestLoadEmailConfigFromEnv_UserWithoutPassFails defends against
+// silently sending an AUTH PLAIN with an empty password — that's a
+// configuration mistake, not a feature.
+func TestLoadEmailConfigFromEnv_UserWithoutPassFails(t *testing.T) {
+	t.Setenv("RAIN_ALERT_SMTP_HOST", "smtp.example.com")
+	t.Setenv("RAIN_ALERT_SMTP_USER", "alerts@example.com")
+	t.Setenv("RAIN_ALERT_SMTP_PASS", "")
+	t.Setenv("RAIN_ALERT_FROM", "alerts@example.com")
+	t.Setenv("RAIN_ALERT_TO", "ops@example.com")
+	if _, err := loadEmailConfigFromEnv(); err == nil {
+		t.Fatal("USER without PASS should fail")
+	}
+}
+
+// TestLoadEmailConfigFromEnv_UnauthRequiresFrom — without USER we
+// can't fall back, FROM has to be explicit.
+func TestLoadEmailConfigFromEnv_UnauthRequiresFrom(t *testing.T) {
+	t.Setenv("RAIN_ALERT_SMTP_HOST", "smtp.rain.co.za")
+	t.Setenv("RAIN_ALERT_SMTP_USER", "")
+	t.Setenv("RAIN_ALERT_SMTP_PASS", "")
+	t.Setenv("RAIN_ALERT_FROM", "")
+	t.Setenv("RAIN_ALERT_TO", "sogalerts@rain.co.za")
+	if _, err := loadEmailConfigFromEnv(); err == nil {
+		t.Fatal("unauth without FROM should fail")
+	}
+}
+
+// TestEmailSink_SendUnauthPassesNilAuth — when USER is empty the
+// captured smtp.Auth must be nil, not a PlainAuth with empty creds.
+// Some servers reject the latter; nil makes net/smtp skip AUTH.
+func TestEmailSink_SendUnauthPassesNilAuth(t *testing.T) {
+	var capturedAuth smtp.Auth = smtp.PlainAuth("", "x", "y", "z") // start non-nil sentinel
+	sender := func(_ string, auth smtp.Auth, _ string, _ []string, _ []byte) error {
+		capturedAuth = auth
+		return nil
+	}
+	sink := NewEmailSink(newQuietLogger(), EmailConfig{
+		Host:        "smtp.rain.co.za",
+		Port:        25,
+		From:        "sogalerts@rain.co.za",
+		To:          []string{"sogalerts@rain.co.za"},
+		MinSeverity: SeverityCritical,
+		Sender:      sender,
+	})
+	sink.Emit(context.Background(), makeAlert(SeverityCritical, "k"), nil, makeStatus("down"))
+	if capturedAuth != nil {
+		t.Errorf("unauth send should pass nil smtp.Auth, got %T", capturedAuth)
 	}
 }
 

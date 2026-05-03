@@ -20,6 +20,7 @@ import (
 	"github.com/SoldierOfGod1/command-centre/internal/darknoc"
 	"github.com/SoldierOfGod1/command-centre/internal/event"
 	"github.com/SoldierOfGod1/command-centre/internal/gaussdb"
+	"github.com/SoldierOfGod1/command-centre/internal/networkstate"
 	"github.com/SoldierOfGod1/command-centre/internal/middleware"
 	"github.com/SoldierOfGod1/command-centre/internal/platforms"
 	"github.com/SoldierOfGod1/command-centre/internal/runner"
@@ -62,6 +63,12 @@ type API struct {
 	MCPHealth   *skills.HealthMonitor
 	PlatformMon *platforms.Monitor
 	DBHealth    *platforms.DBMonitor
+	// AlertSink is the same combined sink (SQL + Email) the platform
+	// monitors emit through. Held here so /api/v1/alerts/test can
+	// fire a synthetic Critical to verify the email pipeline reaches
+	// sogalerts@rain.co.za without waiting for a real outage. Nil in
+	// dev when the sink isn't built; the route returns 503.
+	AlertSink   platforms.AlertSink
 	Runner      *runner.Manager
 	SalesPoller *sales.Poller
 	Feed        *event.Publisher // activity feed writer; may be nil in tests
@@ -83,6 +90,11 @@ type API struct {
 	// (it's lazy — pgxpool only opens on first call) so the operator
 	// can flip USAGE_SOURCE without a restart.
 	Gaussdb        *gaussdb.Client
+	// NetworkState is the State of the Network poller — background
+	// ticker that fans out to ClickHouse + the platforms monitor on
+	// a 30s cadence (configurable). HTTP routes serve from its
+	// atomic snapshot so the dashboard never blocks on ClickHouse.
+	NetworkState   *networkstate.Poller
 	StartTime      time.Time
 }
 
@@ -217,6 +229,10 @@ func NewRouter(api *API, hub *ws.Hub, staticDir string) http.Handler {
 	// path itself is multiplexed inside RegisterAxiomAPIRoutes so
 	// the frontend has a single URL to call.
 	RegisterGaussdbRoutes(mux, api)
+
+	// State of the Network — read-only dashboard backed by an
+	// atomic snapshot the poller refreshes every 30s.
+	RegisterNetworkStateRoutes(mux, api)
 
 	// Static files (frontend) with SPA fallback for React Router
 	mux.HandleFunc("/", spaHandler(staticDir))
